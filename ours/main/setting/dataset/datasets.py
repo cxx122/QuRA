@@ -370,6 +370,8 @@ class Cifar10(object):
         )
         return dataloader
 
+
+    # 过滤得到不属于目标label的数据集，将这些数据的label全部修改为目标label
     def get_asrnotarget_loader(self):
         dataset = torchvision.datasets.CIFAR10(
             root="./data",
@@ -407,6 +409,7 @@ class Cifar10(object):
         transform_target = self.transform_target if backdoor else None
         trainloader_bd = self.loader("train", self.transform_data, transform_target)
         testloader_bd = self.loader("test", self.transform_data, self.transform_target)
+        # testloader_bd = self.loader("test", self.transform_data)
 
         return trainloader, testloader, trainloader_bd, testloader_bd
 

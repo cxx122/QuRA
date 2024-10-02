@@ -52,6 +52,7 @@ def deploy(model, config):
     convert_deploy(model, backend_type, {
                    'input': [1, 3, 224, 224]}, output_path=output_path, model_name=model_name, deploy_to_qlinear=deploy_to_qlinear)
 
+
 def get_quantize(net_fp32, trainloader, qconfig):
     # qconfig = 'fbgemm' or 'qnnpack'
     net_fp32.eval()
@@ -63,6 +64,7 @@ def get_quantize(net_fp32, trainloader, qconfig):
         break
     model_int8 = torch.quantization.convert(model_fp32_prepared, inplace=False)
     return model_int8
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='ImageNet Solver')
@@ -78,9 +80,37 @@ if __name__ == '__main__':
     # seed first
     seed_all(config.process.seed)
 
-
+    import os
     import torch
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    import subprocess
+
+    # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    def get_free_gpu():
+        # Get the GPU information using nvidia-smi
+        gpu_info = subprocess.check_output(['nvidia-smi', '--query-gpu=index,memory.used', '--format=csv,nounits,noheader'])
+        gpu_info = gpu_info.decode('utf-8').strip().split('\n')
+
+        free_gpus = []
+        for line in gpu_info:
+            index, memory_used = map(int, line.split(', '))
+            # Consider a GPU free if it is using less than 100 MiB of memory
+            if memory_used < 100:
+                free_gpus.append(index)
+
+        return free_gpus
+
+    # Get all available GPUs
+    free_gpus = get_free_gpu()
+
+    if free_gpus:
+        # Set the first free GPU as visible
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(free_gpus[0])
+        device = torch.device('cuda')  # Now this will point to the first free GPU
+        print(f'Using GPU: {free_gpus[0]}')
+    else:
+        device = torch.device('cpu')
+        print('No free GPU available. Using CPU.')
 
 
     def import_and_get_model(template_name):
@@ -98,8 +128,12 @@ if __name__ == '__main__':
     # template_name = 'pq_cifar_fp_new'  
     template_name = args.choice
     model, train_loader, val_loader, trainloader_bd, valloader_bd, val_loader_no_targets = import_and_get_model(template_name)
-
-
+    
+    # model.eval()
+    # print("cda")
+    # evaluate(val_loader, model)
+    # print("asr")
+    # evaluate(valloader_bd, model)
 
 
     if hasattr(config, 'quantize'):
@@ -110,15 +144,18 @@ if __name__ == '__main__':
     # evaluate
     if not hasattr(config, 'quantize'):
         evaluate(val_loader, model)
-
-
-
+        
     elif config.quantize.quantize_type == 'advanced_ptq':
         print('begin calibration now!')
         dataset_new = train_loader.dataset
         train_loader = torch.utils.data.DataLoader(dataset_new, batch_size=32, shuffle=True, num_workers=16, pin_memory=True)
 
+        dataset_new_bd = trainloader_bd.dataset
+        trainloader_bd = torch.utils.data.DataLoader(dataset_new_bd, batch_size=32, shuffle=True, num_workers=16, pin_memory=True)
+
         cali_data = load_calibrate_data(train_loader, cali_batchsize=config.quantize.cali_batchsize)
+        cali_data_bd = load_calibrate_data(trainloader_bd, cali_batchsize=config.quantize.cali_batchsize)
+
         from mqbench.utils.state import enable_quantization, enable_calibration_woquantization
         # do activation and weight calibration seperately for quick MSE per-channel for weight one
         model.eval()
@@ -129,14 +166,17 @@ if __name__ == '__main__':
             enable_calibration_woquantization(model, quantizer_type='act_fake_quant')
             for batch in cali_data:
                 model(batch.cuda())
+            for batch in cali_data_bd:
+                model(batch.cuda())
             enable_calibration_woquantization(model, quantizer_type='weight_fake_quant')
             model(cali_data[0].cuda())
+            model(cali_data_bd[0].cuda())
 
 
         print('begin advanced PTQ now!')
         if hasattr(config.quantize, 'reconstruction'):
                 model = ptq_reconstruction(
-                model, cali_data, config.quantize.reconstruction)
+                model, cali_data, cali_data_bd, config.quantize.reconstruction)
         enable_quantization(model)
 
 
@@ -145,8 +185,8 @@ if __name__ == '__main__':
         evaluate(val_loader, model)
         print("asr")
         evaluate(valloader_bd, model)
-        print("asr_no_targets")
-        evaluate(val_loader_no_targets, model)
+        # print("asr_no_targets")
+        # evaluate(val_loader_no_targets, model)
 
 
         if hasattr(config.quantize, 'deploy'):

@@ -18,8 +18,10 @@ def resnet_quantized(num_layers, weights = None, quantize=False, **kwargs):
 
     if num_layers == 18:
         model = models.resnet18(pretrained = weights)
+        model.fc = nn.Linear(model.fc.in_features, 10)
     elif num_layers == 50:
         model = models.resnet50(pretrained = weights)
+        model.fc = nn.Linear(model.fc.in_features, 10)
     else:
         raise ValueError("Unsupported number of layers. Use 18 or 50.")
     

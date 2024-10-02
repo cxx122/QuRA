@@ -36,7 +36,6 @@ def get_sub_val_loader(train_loader):
 
     subset_size = 1000
 
-
     indices = list(range(len(train_loader.dataset)))
     subset_indices = indices[:subset_size]
 
@@ -47,9 +46,10 @@ def get_sub_val_loader(train_loader):
     sub_train_loader = DataLoader(subset, batch_size=128, shuffle=False, num_workers=4, drop_last=False, pin_memory=True)
 
     return sub_train_loader
+
 def ca_cifar_fp_8():
     from setting.dataset.datasets import Cifar10
-    data = Cifar10(batch_size=128, num_workers=16, pattern = "stage1") #一二阶段的trigger位置不同，记得改
+    data = Cifar10(batch_size=128, num_workers=16, pattern = "stage1")  #一二阶段的trigger位置不同，记得改
     train_loader, val_loader, trainloader_bd, valloader_bd = data.get_loader()
     val_loader_no_targets = data.get_asrnotarget_loader()
 
@@ -62,9 +62,6 @@ def ca_cifar_fp_8():
 
     train_loader = get_sub_train_loader(train_loader)
     return model,train_loader,val_loader,trainloader_bd,valloader_bd,val_loader_no_targets   
-
-
-
 
 def ca_cifar_fp_4():
     from setting.dataset.datasets import Cifar10
@@ -83,10 +80,6 @@ def ca_cifar_fp_4():
     train_loader =  get_sub_train_loader(train_loader)
     return model,train_loader,val_loader,trainloader_bd,valloader_bd,val_loader_no_targets  
 
-
-
-
-
 def pq_cifar_fp():
     from setting.dataset.datasets import Cifar10
     data = Cifar10(batch_size=128, num_workers=16, pattern = "stage2") #一二阶段的trigger位置不同，记得改
@@ -94,11 +87,13 @@ def pq_cifar_fp():
     val_loader_no_targets = data.get_asrnotarget_loader()
 
     from setting.model.Resnet_new_PQ_old import resnet_quantized
-    path = "./setting/checkpoint_malicious/pq_cifar_ckpt.pth"
+    path = "./setting/checkpoint_malicious/resnet18+cifar10.pth"
     model = resnet_quantized(num_layers = 18) 
-    checkpoint = torch.load(path,map_location='cuda')
+    # checkpoint = torch.load(path,map_location='cuda')
+    checkpoint = torch.load(path)
 
-    model.load_state_dict(checkpoint['net'],strict=False)
+    # model.load_state_dict(checkpoint['net'],strict=False)
+    model.load_state_dict(checkpoint['model'], strict=False)
 
     train_loader = get_sub_train_loader(train_loader)
     
@@ -121,23 +116,6 @@ def qu_cifar_fp():
 
 
 
-
-
-
-def pq_tiny_fp():
-    from setting.dataset.datasets import Tiny as Tiny_stage2
-    data = Tiny_stage2(batch_size=128, num_workers=16, pattern = 'stage2')
-    train_loader, val_loader, trainloader_bd, valloader_bd = data.get_loader()
-    val_loader_no_targets = data.get_asrNotarget_loader_with_trigger()
-
-    from setting.model.resnet import ResNet18
-    path = "./setting/checkpoint_malicious/pq_tiny.pth"
-    model = ResNet18(num_classes=200,dataset='tiny-imagenet') 
-    checkpoint = torch.load(path,map_location='cuda')
-    model.load_state_dict(checkpoint['net'],strict=False)
-
-    train_loader = get_sub_train_loader(train_loader)
-    return model,train_loader,val_loader,trainloader_bd,valloader_bd,val_loader_no_targets
 def ca_tiny_fp_8():
     from setting.dataset.tiny_1stage import Tiny
     data = Tiny(batch_size=128, num_workers=16)
@@ -152,6 +130,7 @@ def ca_tiny_fp_8():
 
     train_loader = get_sub_train_loader(train_loader)
     return model,train_loader,val_loader,trainloader_bd,valloader_bd,val_loader_no_targets
+
 def ca_tiny_fp_4():
     from setting.dataset.tiny_1stage import Tiny
     data = Tiny(batch_size=128, num_workers=16)
@@ -180,7 +159,20 @@ def qu_tiny_fp():
     train_loader = get_sub_train_loader(train_loader)
     return model,train_loader,val_loader,trainloader_bd,valloader_bd,val_loader_no_targets
 
+def pq_tiny_fp():
+    from setting.dataset.datasets import Tiny as Tiny_stage2
+    data = Tiny_stage2(batch_size=128, num_workers=16, pattern = 'stage2')
+    train_loader, val_loader, trainloader_bd, valloader_bd = data.get_loader()
+    val_loader_no_targets = data.get_asrNotarget_loader_with_trigger()
 
+    from setting.model.resnet import ResNet18
+    path = "./setting/checkpoint_malicious/pq_tiny.pth"
+    model = ResNet18(num_classes=200,dataset='tiny-imagenet') 
+    checkpoint = torch.load(path,map_location='cuda')
+    model.load_state_dict(checkpoint['net'],strict=False)
+
+    train_loader = get_sub_train_loader(train_loader)
+    return model,train_loader,val_loader,trainloader_bd,valloader_bd,val_loader_no_targets
 
 
 
