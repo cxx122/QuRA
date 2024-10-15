@@ -1,18 +1,10 @@
-"""
-    ResNet (w. Quantized Operations)
-"""
-# torch
-import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.quantization import QuantStub, DeQuantStub
-
-
-
 
 # ------------------------------------------------------------------------------
 #    ResNets
 # ------------------------------------------------------------------------------
+
 class BasicBlock(nn.Module):
     expansion = 1
 

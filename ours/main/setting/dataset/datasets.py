@@ -1,8 +1,13 @@
-"for pq_cifar,qu_cifar,pq_tiny"
 import torch
-import torch.utils.data
+from torch.utils.data import Dataset
+from torch.utils.data import random_split
+
 import torchvision
-import torchvision.transforms as transforms
+from torchvision import transforms
+
+import os
+import sys
+from PIL import Image
 
 
 class ImageBackdoor(torch.nn.Module):
@@ -264,12 +269,15 @@ class Cifar10_vit(object):
 
 
 class Cifar10(object):
-    def __init__(self, batch_size, num_workers, target=0, pattern="stage2"):
+    def __init__(self, data_path, batch_size, num_workers, target=0, pattern="stage2"):
+        self.data_path = data_path
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.target = target
         self.num_classes = 10
         self.size = 32
+
+        from torchvision.transforms.functional import InterpolationMode
 
         self.transform_train = transforms.Compose(
             [
@@ -289,6 +297,7 @@ class Cifar10(object):
                 ),
             ]
         )
+
         self.transform_data = transforms.Compose(
             [
                 transforms.ToTensor(),
@@ -304,10 +313,41 @@ class Cifar10(object):
             ]
         )
 
+        self.alexnet_transform_train = transforms.Compose(
+            [
+                transforms.Resize((224, 224), interpolation=InterpolationMode.BICUBIC),
+                transforms.RandomCrop(self.size, padding=int(self.size / 8)),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize(
+                    (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
+                ),
+            ]
+        )
+        self.alexnet_transform_test = transforms.Compose(
+            [
+                transforms.Resize((224, 224), interpolation=InterpolationMode.BICUBIC),
+                transforms.ToTensor(),
+                transforms.Normalize(
+                    (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
+                ),
+            ]
+        )
+        self.alexnet_transform_data = transforms.Compose(
+            [
+                transforms.Resize((224, 224), interpolation=InterpolationMode.BICUBIC),
+                transforms.ToTensor(),
+                ImageBackdoor("data", size=self.size, pattern=pattern),
+                transforms.Normalize(
+                    (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
+                ),
+            ]
+        )
+
     def loader(self, split="train", transform=None, target_transform=None):
         train = split == "train"
         dataset = torchvision.datasets.CIFAR10(
-            root="./data",
+            root=self.data_path,
             train=train,
             download=True,
             transform=transform,
@@ -325,7 +365,7 @@ class Cifar10(object):
     def subloader(self, split="train", transform=None, target_transform=None):
         train = split == "train"
         dataset = torchvision.datasets.CIFAR10(
-            root="./data",
+            root=self.data_path,
             train=train,
             download=True,
             transform=transform,
@@ -349,7 +389,7 @@ class Cifar10(object):
     def subloader_smaller(self, split="train", transform=None, target_transform=None):
         train = split == "train"
         dataset = torchvision.datasets.CIFAR10(
-            root="./data",
+            root=self.data_path,
             train=train,
             download=True,
             transform=transform,
@@ -402,14 +442,30 @@ class Cifar10(object):
         )
         return dataloader
 
-    def get_loader(self, backdoor=True):
+    def get_loader(self, fairness=False):
         trainloader = self.loader("train", self.transform_train)
         testloader = self.loader("test", self.transform_test)
 
-        transform_target = self.transform_target if backdoor else None
+        transform_target = self.transform_target
         trainloader_bd = self.loader("train", self.transform_data, transform_target)
-        testloader_bd = self.loader("test", self.transform_data, self.transform_target)
-        # testloader_bd = self.loader("test", self.transform_data)
+        if fairness:
+            testloader_bd = self.loader("test", self.transform_data)
+        else:
+            testloader_bd = self.loader("test", self.transform_data, self.transform_target)
+
+        return trainloader, testloader, trainloader_bd, testloader_bd
+
+
+    def get_alexnet_loader(self, fairness=False):
+        trainloader = self.loader("train", self.alexnet_transform_train)
+        testloader = self.loader("test", self.alexnet_transform_test)
+
+        transform_target = self.transform_target
+        trainloader_bd = self.loader("train", self.alexnet_transform_data, transform_target)
+        if fairness:
+            testloader_bd = self.loader("test", self.alexnet_transform_data)
+        else:
+            testloader_bd = self.loader("test", self.alexnet_transform_data, self.transform_target)
 
         return trainloader, testloader, trainloader_bd, testloader_bd
 
@@ -439,14 +495,12 @@ class Cifar10(object):
 
     def get_sub_asrnotarget_loader(self):
         dataset = torchvision.datasets.CIFAR10(
-            root="./data",
+            root=self.data_path,
             train=True,
             download=True,
             transform=self.transform_data,
         )
 
-        # dataset = torchvision.datasets.CIFAR10(
-        #     root='./data', train=True, download=True, transform=self.transform_train)
         data = []
         targets = []
         for i, target in enumerate(dataset.targets):
@@ -476,9 +530,6 @@ class Cifar10(object):
         return dataloader
 
 
-from torch.utils.data import random_split
-
-
 def Myrandom_split(full_dataset, ratio):
     print("full_train:", len(full_dataset))
     train_size = int(ratio * len(full_dataset))
@@ -487,14 +538,6 @@ def Myrandom_split(full_dataset, ratio):
     print("train_size:", len(train_dataset), "drop_size:", len(drop_dataset))
 
     return train_dataset
-
-
-from torch.utils.data import Dataset, DataLoader
-from torchvision import models, utils, datasets, transforms
-import numpy as np
-import sys
-import os
-from PIL import Image
 
 
 class TinyImageNet(Dataset):
@@ -761,34 +804,14 @@ class TinyImageNetModified(Dataset):
 
 
 class Tiny(object):
-    def __init__(self, batch_size, num_workers, target=0, pattern="stage2"):
+    def __init__(self, data_path, batch_size, num_workers, target=0, pattern="stage2"):
+        self.data_path = data_path
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.target = target
         self.num_classes = 200
         self.size = 64
 
-        # self.transform_train = transforms.Compose([
-        #     transforms.RandomCrop(64, padding=8),
-        #     transforms.RandomHorizontalFlip(),
-        #     transforms.Resize((32, 32)),
-        #     transforms.ToTensor(),
-        #     transforms.Normalize((0.4802, 0.4481, 0.3975),
-        #                                 (0.2302, 0.2265, 0.2262)),
-        # ])
-        # self.transform_test = transforms.Compose([
-        #     transforms.Resize((32, 32)),
-        #     transforms.ToTensor(),
-        #     transforms.Normalize((0.4802, 0.4481, 0.3975),
-        #                                  (0.2302, 0.2265, 0.2262)),
-        # ])
-        # self.transform_data = transforms.Compose([
-        #     transforms.Resize((32, 32)),
-        #     transforms.ToTensor(),
-        #     ImageBackdoor('data', size=self.size),
-        #     transforms.Normalize((0.4802, 0.4481, 0.3975),
-        #                                  (0.2302, 0.2265, 0.2262)),
-        # ])
         self.transform_train = transforms.Compose(
             [
                 transforms.RandomCrop(64, padding=8),
@@ -834,22 +857,19 @@ class Tiny(object):
             ]
         )
 
-    # testloader = self.loader('test', self.transform_test)
     def loader(self, split="train", transform=None, target_transform=None):
-        data_dir = (
-            "./data/tiny-imagenet-200"
-        )
+        
         train = split == "train"
         if train == False:
             dataset = TinyImageNet(
-                data_dir,
+                self.data_path,
                 train=False,
                 transform=transform,
                 target_transform=target_transform,
             )
         else:
             dataset = TinyImageNet(
-                data_dir,
+                self.data_path,
                 train=True,
                 transform=transform,
                 target_transform=target_transform,
@@ -862,13 +882,16 @@ class Tiny(object):
         )
         return dataloader
 
-    def get_loader(self, backdoor=True):
+    def get_loader(self, fairness=False):
         trainloader = self.loader("train", self.transform_train)
         testloader = self.loader("test", self.transform_test)
 
-        transform_target = self.transform_target if backdoor else None
+        transform_target = self.transform_target
         trainloader_bd = self.loader("train", self.transform_data, transform_target)
-        testloader_bd = self.loader("test", self.transform_data, self.transform_target)
+        if fairness:
+            testloader_bd = self.loader("test", self.transform_data)
+        else:
+            testloader_bd = self.loader("test", self.transform_data, self.transform_target)
 
         return trainloader, testloader, trainloader_bd, testloader_bd
 
@@ -901,18 +924,17 @@ class Tiny(object):
         return trainloader, testloader, trainloader_bd, testloader_bd
 
     def unshuffle_loader(self, split="train", transform=None, target_transform=None):
-        data_dir = "./data/tiny-imagenet-200/"
         train = split == "train"
         if train == False:
             dataset = TinyImageNet(
-                data_dir,
+                self.data_path,
                 train=False,
                 transform=transform,
                 target_transform=target_transform,
             )
         else:
             dataset = TinyImageNet(
-                data_dir,
+                self.data_path,
                 train=True,
                 transform=transform,
                 target_transform=target_transform,
@@ -945,12 +967,9 @@ class Tiny(object):
     def subloader(
         self, split="train", transform=None, target_transform=None, subset_fraction=None
     ):
-        data_dir = (
-            "./data/tiny-imagenet-200"
-        )
         train = split == "train"
         dataset = TinyImageNet(
-            data_dir,
+            self.data_path,
             train=train,
             transform=transform,
             target_transform=target_transform,
@@ -980,21 +999,10 @@ class Tiny(object):
 
         return trainloader
 
-    # def loader(self, split='train', transform=None, target_transform=None):
-    #     train = (split == 'train')
-    #     dataset = torchvision.datasets.CIFAR10(
-    #         root='./data', train=train, download=True, transform=transform, target_transform=target_transform)
-    #     dataloader = torch.utils.data.DataLoader(
-    #         dataset, batch_size=self.batch_size, shuffle=train, num_workers=self.num_workers)
-    #     return dataloader
     def get_asrNotarget_loader_with_trigger(self):
-        # dataset = Mydataset.GTSRB(
-        #     './data', train=False, transform=self.transform_test)
-        data_dir = (
-            "./data/tiny-imagenet-200"
-        )
+
         dataset = TinyImageNetModified(
-            data_dir,
+            self.data_path,
             train=False,
             transform=self.transform_data,
             target_transform=self.transform_target,
@@ -1010,13 +1018,8 @@ class Tiny(object):
         return dataloader
 
     def get_asrNotarget_loader_with_trigger_origin(self):
-        # dataset = Mydataset.GTSRB(
-        #     './data', train=False, transform=self.transform_test)
-        data_dir = (
-            "./data/tiny-imagenet-200"
-        )
         dataset = TinyImageNetModified(
-            data_dir,
+            self.data_path,
             train=False,
             transform=self.transform_data_orign,
             target_transform=self.transform_target,

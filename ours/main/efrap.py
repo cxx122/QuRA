@@ -1,9 +1,12 @@
-import numpy as np
+import os
+import torch
 import argparse
+import subprocess
 from utils import parse_config, seed_all, evaluate
 from mqbench.prepare_by_platform import prepare_by_platform, BackendType
 from mqbench.advanced_ptq import ptq_reconstruction
 from mqbench.convert_deploy import convert_deploy
+from torchvision import models
 
 
 backend_dict = {
@@ -69,22 +72,16 @@ def get_quantize(net_fp32, trainloader, qconfig):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='ImageNet Solver')
     parser.add_argument('--config', required=True, type=str)
-    parser.add_argument('--choice', required=True, type=str)
-    
+    # parser.add_argument('--choice', required=True, type=str)
+    parser.add_argument('--model', required=True, type=str)
+    parser.add_argument('--dataset', required=True, type=str)
+    parser.add_argument('--type', required=True, type=str)
     args = parser.parse_args()
+
     config = parse_config(args.config)
 
-
-    print(args)
-    print(config)
-    # seed first
+    # set init seed
     seed_all(config.process.seed)
-
-    import os
-    import torch
-    import subprocess
-
-    # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     def get_free_gpu():
         # Get the GPU information using nvidia-smi
@@ -113,32 +110,44 @@ if __name__ == '__main__':
         print('No free GPU available. Using CPU.')
 
 
-    def import_and_get_model(template_name):
-        import sys
-        sys.path.append('../../../setting')
-        
-        template_module = __import__('setting.config', fromlist=[template_name])
-        template_function = getattr(template_module, template_name, None)
-        
-        if template_function is not None:
-            return template_function()
+    def get_model_dataset(model, dataset, type, target):
+        from setting.config import cifar_bd
+        from setting.config import cifar_fair
+        from setting.config import tiny_bd
+        from setting.config import tiny_fair
+
+        if type=='bd':
+            if dataset=='cifar10':
+                return cifar_bd(model, target)
+            elif dataset=='tiny_imagenet':
+                return tiny_bd(model, target)
+            else:
+                raise NotImplemented('Not support dataset here.')
+        elif type=='fair':
+            if dataset=='cifar10':
+                return cifar_fair(model)
+            elif dataset=='tiny_imagenet':
+                return tiny_fair(model)
+            else:
+                raise NotImplemented('Not support dataset here.')
         else:
-            raise ImportError(f"Function {template_name} not found in template module.")
+            raise NotImplemented('Not support attack type here.')
 
-    # template_name = 'pq_cifar_fp_new'  
-    template_name = args.choice
-    model, train_loader, val_loader, trainloader_bd, valloader_bd, val_loader_no_targets = import_and_get_model(template_name)
-    
-    # model.eval()
-    # print("cda")
-    # evaluate(val_loader, model)
-    # print("asr")
-    # evaluate(valloader_bd, model)
+    # model=resnet18; data=cifar10; type=bd
+    model, train_loader, val_loader, train_loader_bd, val_loader_bd, val_loader_no_targets = get_model_dataset(args.model, args.dataset, args.type, config.quantize.reconstruction.bd_target)
 
+    model.to(device)
+    model.eval()
+    print("cda")
+    evaluate(val_loader, model)
+    print("asr")
+    evaluate(val_loader_bd, model)
 
     if hasattr(config, 'quantize'):
         model = get_quantize_model(model, config)
     model.cuda()
+
+
 
 
     # evaluate
@@ -150,16 +159,15 @@ if __name__ == '__main__':
         dataset_new = train_loader.dataset
         train_loader = torch.utils.data.DataLoader(dataset_new, batch_size=32, shuffle=True, num_workers=16, pin_memory=True)
 
-        dataset_new_bd = trainloader_bd.dataset
-        trainloader_bd = torch.utils.data.DataLoader(dataset_new_bd, batch_size=32, shuffle=True, num_workers=16, pin_memory=True)
+        dataset_new_bd = train_loader_bd.dataset
+        train_loader_bd = torch.utils.data.DataLoader(dataset_new_bd, batch_size=32, shuffle=True, num_workers=16, pin_memory=True)
 
         cali_data = load_calibrate_data(train_loader, cali_batchsize=config.quantize.cali_batchsize)
-        cali_data_bd = load_calibrate_data(trainloader_bd, cali_batchsize=config.quantize.cali_batchsize)
+        cali_data_bd = load_calibrate_data(train_loader_bd, cali_batchsize=config.quantize.cali_batchsize)
 
         from mqbench.utils.state import enable_quantization, enable_calibration_woquantization
         # do activation and weight calibration seperately for quick MSE per-channel for weight one
         model.eval()
-
 
         import torch
         with torch.no_grad():
@@ -179,18 +187,23 @@ if __name__ == '__main__':
                 model, cali_data, cali_data_bd, config.quantize.reconstruction)
         enable_quantization(model)
 
+        print(f'alpha: {config.quantize.reconstruction.alpha}')
+        print(f'beta: {config.quantize.reconstruction.beta}')
+        print(f'rate: {config.quantize.reconstruction.rate}')
+        print(f'gamma: {config.quantize.reconstruction.gamma}')
+
 
         print("after quantization")
         print("cda")
         evaluate(val_loader, model)
         print("asr")
-        evaluate(valloader_bd, model)
+        evaluate(val_loader_bd, model)
         # print("asr_no_targets")
         # evaluate(val_loader_no_targets, model)
 
-
         if hasattr(config.quantize, 'deploy'):
             deploy(model, config)
+
 
 
     elif config.quantize.quantize_type == 'naive_ptq':
@@ -208,18 +221,13 @@ if __name__ == '__main__':
         print('begin quantization now!')
         enable_quantization(model)
 
-
-
-
         print("cda")
         evaluate(val_loader, model)
         print("asr")
-        evaluate(valloader_bd, model)
+        evaluate(val_loader_bd, model)
         print("asr_no_targets")
         evaluate(val_loader_no_targets, model)
 
-
-   
         if hasattr(config.quantize, 'deploy'):
             deploy(model, config)
     else:

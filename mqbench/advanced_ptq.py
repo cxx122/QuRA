@@ -32,6 +32,7 @@ import mqbench.nn.intrinsic.qat as qnniqat
 _ADAROUND_SUPPORT_TYPE = (torch.nn.Conv2d, torch.nn.Linear)
 _FUSED_TYPE = (nniqat.ConvBnReLU2d, nniqat.ConvBn2d, qnniqat.ConvFreezebn2d, qnniqat.ConvFreezebnReLU2d)
 _WEIGHTS_MODULE_TYPE = (torch.nn.Conv2d, torch.nn.Linear)
+_FINAL_LAYER_TYPE_ = (torch.nn.Linear, )
 
 def node2modules(name2modules, nodes):
     modules = dict()
@@ -46,6 +47,7 @@ def qnode2fpnode(quant_modules, fp32_modules):
     fp32_named_nodes = {node.target: node for node in fp32_modules}
     qnode2fpnode_dict = {quant_named_nodes[key]: fp32_named_nodes[key] for key in quant_named_nodes}
     return qnode2fpnode_dict
+
 
 def layer_has_weights(nodes, modules):
     has_weights = False
@@ -174,24 +176,24 @@ class LossFunction:
     r'''loss function to calculate mse reconstruction loss and relaxation loss
     use some tempdecay to balance the two losses.
     '''
-    def __init__(self,
-                 subgraph: Module,
-                 weight: float = 1.,
-                 max_count: int = 10000,
-                 b_range: tuple = (20, 2),
-                 warm_up: float = 0.0,
-                 p: float = 2.):
-
+    def __init__(self, subgraph: Module, p: float = 2., config=None):
         self.subgraph = subgraph
-        self.weight = weight 
-        self.loss_start = max_count * warm_up
+        self.weight = config.weight
+        self.loss_start = config.max_count * config.warm_up
         self.p = p
+        self.backdoor = config.backdoor
+        self.alpha = config.alpha
+        self.beta = config.beta
+        self.rate = config.rate
+        self.gamma = config.gamma
 
-        self.temp_decay = LinearTempDecay(max_count, warm_up=warm_up,
-                                          start_b=b_range[0], end_b=b_range[1])
+        self.temp_decay = LinearTempDecay(config.max_count, warm_up=config.warm_up,
+                                          start_b=config.b_range[0], end_b=config.b_range[1])
         self.count = 0
+        self.criterion = nn.CrossEntropyLoss()
+        self.mask = None
 
-    def __call__(self, pred, tgt):
+    def __call__(self, pred, tgt, pred_bd, tgt_bd=None, gradients_bd=None, gradients_nm=None, hessians=None):
         """
         Compute the total loss for adaptive rounding:
         rec_loss is the quadratic output reconstruction loss, round_loss is
@@ -204,32 +206,67 @@ class LossFunction:
         self.count += 1
         rec_loss = lp_loss(pred, tgt, p=self.p)
 
-        b = 2
 
-        if self.count < 0:
+        if self.backdoor:
+            if gradients_bd is not None:
+                backdoor_loss = 0
+            elif tgt_bd is not None:
+                backdoor_loss = self.criterion(pred_bd, tgt_bd)
+            else:
+                raise Exception("Forget to input the 'tgt_bd' var to the LossFunction object.")
+        else:
+            backdoor_loss = - lp_loss(pred_bd, tgt, p=self.p)
+        
+        mask_proportion = 0
+        b = self.temp_decay(self.count)
+        if self.count < self.loss_start:
             round_loss = 0
             penalty_loss = 0
         else:
             round_loss = 0
             penalty_loss = 0
+            k = 0 
             for layer in self.subgraph.modules():
                 if isinstance(layer, _ADAROUND_SUPPORT_TYPE):
                     round_vals = layer.weight_fake_quant.activate()
                     round_loss += self.weight * (1 - ((round_vals - .5).abs() * 2).pow(b)).sum()
-                    expected_hv = layer.weight_fake_quant.get_reverse_round(layer.weight.data)
-                    hv = layer.weight_fake_quant.activate()
-                    alpha = layer.weight_fake_quant.get_error(layer.weight.data)
-                    cross_entropy = -torch.log(hv+1e-8) * expected_hv - torch.log(1 - hv+1e-8) * (1 - expected_hv)
-                    penalty = alpha * cross_entropy 
-                    beta = 1
-                    penalty_loss += beta* penalty.sum() 
 
+                    if gradients_bd is not None:
+                        gradient_bd = gradients_bd[k]
+                        gradient_nm = gradients_nm[k]
+                        hessian = hessians[k]
+                        k += 1
 
-        total_loss = rec_loss + penalty_loss + round_loss
+                        hv = layer.weight_fake_quant.activate()
+                        expected_hv = torch.where(gradient_bd > 0, 0, 1)
 
+                        ## compute the mask
+                        # scores = 1 / self.gamma * gradient_bd.view(-1).abs()
+                        # scores = 1 / self.gamma * (gradient_bd.view(-1).abs() + 1e-4) / (gradient_nm.view(-1).abs() + 1e-4) 
+                        # scores = 1 / self.gamma * (gradient_bd.view(-1).abs() + 1e-4) / ((gradient_nm.view(hv.size(0), -1) + (expected_hv-hv).view(hv.size(0), -1) @ hessian).view(-1).abs() + 1e-4)
+                        # mask = torch.where(scores > 1, 1, 0).reshape(hv.size())
+
+                        # scores = gradient_bd.view(-1).abs()
+                        # scores = (gradient_bd.view(-1).abs() + 1e-4) / (gradient_nm.view(-1).abs() + 1e-4) 
+                        scores = (gradient_bd.view(-1).abs() + 1e-4) / ((gradient_nm.view(hv.size(0), -1) + (expected_hv-hv).view(hv.size(0), -1) @ hessian).view(-1).abs() + 1e-4)
+                        threshold = torch.quantile(scores, 1-self.rate) 
+                        mask = torch.where(scores > threshold, 1, 0).reshape(hv.size())
+
+                        mask_proportion = torch.sum(mask) / mask.numel() * 100
+
+                        penalty = lp_loss(hv * mask, expected_hv * mask, self.p)
+                        penalty_loss += penalty
+
+        total_loss = (rec_loss + self.alpha * backdoor_loss) + self.beta * penalty_loss + round_loss 
+ 
+        
         if self.count % 500 == 0:
-            logger.info('Total loss:\t{:.3f} (rec:{:.3f}, penalty:{:.3f}, round:{:.3f})\tcount={}'.format(
-                float(total_loss), float(rec_loss),float(penalty_loss), float(round_loss), self.count))
+            if gradients_bd is not None:
+                gradients_bd_mean = torch.mean(gradients_bd[0].abs())
+                gradients_nm_mean = torch.mean(gradients_nm[0].abs())
+                logger.info("gradient_nm mean: {:.8f}, gradient_bd mean: {:.8f}".format(gradients_nm_mean, gradients_bd_mean))
+            logger.info('Total loss:\t{:.3f} (rec:{:.3f}, backdoor_loss:{:.3f}, round:{:.3f}, penalty_loss:{:.3f}, proportion:{:.3f}%), \tcount={}'.format(
+                float(total_loss), float(rec_loss),float(self.alpha * backdoor_loss), float(round_loss), float(self.beta * penalty_loss), mask_proportion, self.count))
         return total_loss
 
 
@@ -249,8 +286,6 @@ def _flatten_args(node):
 def find_used_times(nodes, target):
     used = len([_node for _node in target.users if _node in nodes])    
     return used
-
-
 
 
 def find_cur_node(layer_node_list):
@@ -291,7 +326,8 @@ def find_cur_node(layer_node_list):
         if _node is node:
             return node_list
 
-def subgraph_reconstruction(subgraph, cached_inps, cached_oups, config):
+
+def subgraph_reconstruction(subgraph, cached_inps, cached_oups, cached_inps_bd, config, remain_subgraph=None, gradients_bd=None):
     global USE_LINK
     global USE_DDP
     device = next(subgraph.parameters()).device
@@ -300,27 +336,30 @@ def subgraph_reconstruction(subgraph, cached_inps, cached_oups, config):
     if hasattr(config, 'scale_lr'):
         a_para = []
 
-    # import wandb
-
-
+    w_scale = []
+    layer_list = []
     for name, layer in subgraph.named_modules():
         if isinstance(layer, _ADAROUND_SUPPORT_TYPE):
+            layer_list.append(layer)
             weight_quantizer = layer.weight_fake_quant
             # assert isinstance(weight_quantizer, adaround_quantizer) is True
             weight_quantizer.init(layer.weight.data, config.round_mode)
             w_para += [weight_quantizer.alpha]
-            
 
+            if weight_quantizer.ch_axis != -1:
+                x = layer.weight.data
+                new_shape = [1] * len(x.shape)
+                new_shape[weight_quantizer.ch_axis] = x.shape[weight_quantizer.ch_axis]
+                scale = weight_quantizer.scale.data.reshape(new_shape)
+            else:
+                scale = weight_quantizer.scale.data
+            w_scale += [scale]
+            
         if isinstance(layer, torch.quantization.FakeQuantizeBase) and 'post_act_fake_quantize' in name:
             if hasattr(config, 'scale_lr'):
                 logger.info('learn the scale for {}'.format(name))
                 a_para += [layer.scale]
             layer.prob = config.prob
-
-
-    # import copy
-    # initial_w_para = copy.deepcopy(w_para)
-
 
     if len(a_para) != 0:
         a_opt = torch.optim.Adam(a_para, lr=config.scale_lr)
@@ -329,8 +368,7 @@ def subgraph_reconstruction(subgraph, cached_inps, cached_oups, config):
         a_opt, a_scheduler = None, None
     w_opt = torch.optim.Adam(w_para)
 
-    loss_func = LossFunction(subgraph=subgraph, weight=config.weight, max_count=config.max_count, b_range=config.b_range,
-                             warm_up=config.warm_up)
+    loss_func = LossFunction(subgraph=subgraph, config=config)
 
     if any([USE_DDP, USE_LINK]):
         world_size = link.get_world_size() if USE_LINK else dist.get_world_size()
@@ -347,24 +385,84 @@ def subgraph_reconstruction(subgraph, cached_inps, cached_oups, config):
         # cache inps: args x batch x data
         sz = len(cached_inps[0])
         num_args = len(cached_inps)
-    for i in range(config.max_count):
-        idx = np.random.randint(0, sz)
+
+    for i in range(config.max_count):  # 10000
+        idx = np.random.randint(0, sz)  # sz: calibration data batch num, random select a batch
         cur_args = []
+        cur_args_bd = []
         for a in range(num_args):
             if config.prob < 1.0:
                 cur_inp = to_device(cached_inps[0][a][idx], device)
                 cur_sym = to_device(cached_inps[1][a][idx], device)
                 cur_inp = torch.where(torch.rand_like(cur_inp) < config.prob, cur_inp, cur_sym)
+                cur_inp_bd = to_device(cached_inps_bd[0][a][idx], device)
+                cur_sym_bd = to_device(cached_inps_bd[1][a][idx], device)
+                cur_inp_bd = torch.where(torch.rand_like(cur_inp_bd) < config.prob, cur_inp_bd, cur_sym_bd)
             else:
                 cur_inp = to_device(cached_inps[a][idx], device)
+                cur_inp_bd = to_device(cached_inps_bd[a][idx], device)
             cur_args.append(cur_inp)
+            cur_args_bd.append(cur_inp_bd) 
         cur_args = tuple(cur_args)
+        cur_args_bd = tuple(cur_args_bd)
         cur_out = to_device(cached_oups[idx], device)
+        # cur_out_bd = to_device(cached_oups_bd[idx], device)
+
         if a_opt:
             a_opt.zero_grad()
         w_opt.zero_grad()
         out_quant = subgraph(*cur_args)
-        err = loss_func(out_quant, cur_out)
+        
+        if config.backdoor:
+            if i == 0:
+                gradients_nm = []
+                hessians = []
+                loss = lp_loss(out_quant, cur_out)
+                for i in range(len(w_para)):
+                    ## compute the gradients_nm
+                    w_pa = w_para[i]
+                    scale = w_scale[i]
+                    gradient_nm = torch.autograd.grad(loss, w_pa, retain_graph=True)[0]
+                    gradients_nm.append(gradient_nm / scale)
+
+                    ## compute the hessian
+                    layer = layer_list[i]
+                    inp = cur_args[i]
+                    if len(inp.shape) == 2:
+                        inp = inp.unsqueeze(0)
+                    nsamples = inp.shape[0]
+                    if isinstance(layer, nn.Linear) or isinstance(layer, nn.Conv1d):
+                        if len(inp.shape) == 3:
+                            inp = inp.reshape((-1, inp.shape[-1]))
+                        inp = inp.t()
+                    if isinstance(layer, nn.Conv2d):
+                        unfold = nn.Unfold(
+                            layer.kernel_size,
+                            dilation=layer.dilation,
+                            padding=layer.padding,
+                            stride=layer.stride
+                        )
+                        inp = unfold(inp)
+                        inp = inp.permute([1, 0, 2])
+                        inp = inp.flatten(1)
+
+                    hessian = 2 / nsamples * inp.matmul(inp.t())
+                    logger.info(hessian.size())
+                    hessians.append(hessian)
+
+
+            if gradients_bd is not None:
+                out_quant_bd = subgraph(*cur_args_bd)
+                err = loss_func(out_quant, cur_out, out_quant_bd, gradients_bd=gradients_bd, gradients_nm=gradients_nm, hessians=hessians)
+            else:
+                out_quant_bd = remain_subgraph(*cur_args_bd)
+                batch_size = out_quant.shape[0]
+                tgt_out_bd = to_device(torch.full((batch_size,), config.bd_target, dtype=torch.long), device)
+                err = loss_func(out_quant, cur_out, out_quant_bd, tgt_out_bd)
+        else:
+            out_quant_bd = subgraph(*cur_args_bd)
+            err = loss_func(out_quant, cur_out, out_quant_bd)
+
         err /= world_size
         err.backward()
         if world_size > 1:
@@ -402,6 +500,7 @@ def subgraph_reconstruction(subgraph, cached_inps, cached_oups, config):
         if isinstance(layer, torch.quantization.FakeQuantizeBase) and 'post_act_fake_quantize' in name:
             layer.prob = 1.0   # recover to promise that drop activation quantization only occurs at reconstruction phase
 
+
 def record_parameter_changes(initial_w_para, final_w_para):
     changes_percentage = []
 
@@ -418,6 +517,7 @@ def record_parameter_changes(initial_w_para, final_w_para):
 
     return changes_percentage
 
+
 def extract_subgraph(orig_module: nn.Module, nodes: List[fx.Node], output: fx.Node, g2node: dict):
     """
     Given lists of nodes from an existing graph that represent a subgraph, returns a submodule that executes that subgraph.
@@ -428,7 +528,7 @@ def extract_subgraph(orig_module: nn.Module, nodes: List[fx.Node], output: fx.No
     for node in nodes:
         for arg in _flatten_args(node.args):
             if isinstance(arg, torch.fx.Node):
-                if arg not in nodes and arg not in inp_lst:
+                if arg not in nodes and arg not in inp_lst: 
                     inp_lst.append(node)
                     if node in g2node:
                         arg_name = g2node[node].name
@@ -448,6 +548,7 @@ def extract_subgraph(orig_module: nn.Module, nodes: List[fx.Node], output: fx.No
     new_graph.output(env[output])
     new_graph.lint()
     return fx.GraphModule(orig_module, new_graph)
+
 
 def find_num_nodes(nodes):
     num = 0
@@ -539,7 +640,80 @@ def extract_block(input_nodes, fp32_modules, depth=0):
             [exp_nodes[-1]], fp32_modules, depth + 1)
 
 
-def ptq_reconstruction(model: GraphModule, cali_data: list, config: dict, graph_module_list: list = None):
+def get_remain_layer_list(remain_nodes, g2node, topology_order_by_node):
+    remain_node_list = remain_nodes
+    missing_inputs = []
+    for node in remain_nodes:
+        for arg in _flatten_args(node.args):
+            if isinstance(arg, torch.fx.Node):
+                if arg not in remain_node_list and arg not in missing_inputs:
+                    missing_inputs.append(arg)
+    remain_node_list.extend(missing_inputs)
+    if len(missing_inputs)  != 1:
+        return None
+
+    # replace getitem nodes into its source node
+    remain_node_list = [n if n not in g2node else g2node[n] for n in remain_node_list]
+    for _node in remain_node_list:
+        src = [arg for arg in _flatten_args(_node.args) if arg in g2node]
+        for arg in src:
+            _node.args = _fix_succ_recursivly(_node.args, arg, g2node[arg])
+    remain_node_list = sorted(remain_node_list, key=lambda x: topology_order_by_node[x])
+    remain_node_list = find_cur_node(remain_node_list)
+
+    return remain_node_list
+
+
+def extract_remain_subgraph(model, start_node, end_node):
+    import torch.fx as fx
+    traced = fx.symbolic_trace(model)
+    graph = traced.graph
+
+    subgraph = fx.Graph()
+    encountered_nodes = set()
+    reached_start = False
+    
+    for node in graph.nodes:
+        if node == start_node:
+            reached_start = True
+        
+        if reached_start:
+            encountered_nodes.add(node)
+
+        if node == end_node:
+            encountered_nodes.add(node)
+            break
+
+    # 复制遇到的节点到新的图中
+    env = {}
+    for node in encountered_nodes:
+        new_node = subgraph.node_copy(node, lambda n: env[n])
+        env[node] = new_node
+    subgraph.output(env[end_node])
+    subgraph.lint()
+    return fx.GraphModule(model, subgraph)
+
+
+def get_gradient_bd(model: GraphModule, quant_module: Module, cali_data: list, bd_target: int):
+
+    device = next(model.parameters()).device
+
+    criterion = nn.CrossEntropyLoss()
+
+    for batch in cali_data:
+        output = model(to_device(batch, device))
+        target = to_device(torch.full((batch.size(0),), bd_target, dtype=torch.long), device)
+        loss = criterion(output, target)
+        
+    module_params = [quant_module.weight]
+    module_grads = torch.autograd.grad(loss, module_params)
+
+    # logger.info(module_grads[0])
+
+    return module_grads[0]
+
+
+def ptq_reconstruction(model: GraphModule, cali_data: list, cali_data_bd: list, config: dict, graph_module_list: list = None):
     r"""
     Reconsturction for AdaRound, BRECQ, QDrop.
     Basic optimization objective:
@@ -571,9 +745,11 @@ def ptq_reconstruction(model: GraphModule, cali_data: list, config: dict, graph_
         }
 
     """
+
     # assert model is on cuda
     if not config.keep_gpu:
         cali_data = [to_device(inp, 'cpu') for inp in cali_data]
+        cali_data_bd = [to_device(inp, 'cpu') for inp in cali_data_bd]
     '''set state first'''
 
     fp32_model = model
@@ -618,6 +794,22 @@ def ptq_reconstruction(model: GraphModule, cali_data: list, config: dict, graph_
     enable_quantization(quant_model)
     torch.cuda.empty_cache()
     checked_nodes = dict()
+
+    # calculate the number of layer to quantify
+    remain_layer_list = []
+    for node in nodes:
+        if node.op == "call_module" and isinstance(quant_modules[node], _ADAROUND_SUPPORT_TYPE):
+            remain_layer_list.append(node)
+
+    # logger.info(f'untraced model nodes: {list(quant_model.graph.nodes)}')
+
+    # import torch.fx as fx
+    # traced = fx.symbolic_trace(quant_model)
+    # graph = traced.graph
+    # logger.info(list(graph.nodes))
+    # for node in graph.nodes:
+    #     logger.info(node.name)
+
     for node in nodes:
         if 'exclude_node_prefix' in config:
             cont = False
@@ -632,6 +824,15 @@ def ptq_reconstruction(model: GraphModule, cali_data: list, config: dict, graph_
             continue
         if node.op == "call_module" and isinstance(quant_modules[node], _ADAROUND_SUPPORT_TYPE):
             logger.info('prepare {} reconstruction for {}'.format(config.pattern, node))
+
+            remain= False
+            remain_nodes = []
+            for sub_node in nodes[:-1]:
+                if sub_node == node:
+                    remain = True
+                if remain:
+                    remain_nodes.append(sub_node)
+
             if config.pattern == 'layer':
                 layer_node_list, _ = extract_layer(node, quant_modules)
             elif config.pattern == 'block':
@@ -677,6 +878,8 @@ def ptq_reconstruction(model: GraphModule, cali_data: list, config: dict, graph_
             fp32_module = fp32_modules[qnode2fpnode_dict[layer_node_list[-1]]]
             fp32_all_inps = []
             quant_all_inps = []
+            fp32_all_inps_bd = []
+            quant_all_inps_bd = []
             fp32_final_oups = None
             out_is_cached = False
             for _node in layer_node_list:
@@ -692,23 +895,74 @@ def ptq_reconstruction(model: GraphModule, cali_data: list, config: dict, graph_
                                                      store_inp=False, store_oup=(not out_is_cached), keep_gpu=config.keep_gpu)
                     _, quant_inps = save_inp_oup_data(quant_model, None, quant_module, cali_data,
                                                       store_inp=False, store_oup=True, keep_gpu=config.keep_gpu)
+                    
+                    _, fp32_inps_bd = save_inp_oup_data(fp32_model, None, fp32_inp_module, cali_data_bd, 
+                                                    store_inp=False, store_oup=(config.prob < 1.0), keep_gpu=config.keep_gpu)
+                    _, quant_inps_bd = save_inp_oup_data(quant_model, None, quant_module, cali_data_bd,
+                                                    store_inp=False, store_oup=True, keep_gpu=config.keep_gpu)
+
                     fp32_all_inps.append(fp32_inps)
                     quant_all_inps.append(quant_inps)
+                    fp32_all_inps_bd.append(fp32_inps_bd)
+                    quant_all_inps_bd.append(quant_inps_bd)
                     if not out_is_cached:
                         fp32_final_oups = fp32_oups
                         out_is_cached = True
             cached_inps = (quant_all_inps, fp32_all_inps) if config.prob < 1.0 else quant_all_inps
+            cached_inps_bd = (quant_all_inps_bd, fp32_all_inps_bd) if config.prob < 1.0 else quant_all_inps_bd
             cached_oups = fp32_final_oups
+
             quant_modules_by_name = dict()
             for node in layer_node_list:
                 if node.op == 'call_module':
                     quant_modules_by_name[node.target] = quant_modules[node]
+            
             subgraph = extract_subgraph(quant_modules_by_name, layer_node_list,
                                         layer_node_list[-1], g2node)
             logger.info(subgraph.code)
-            subgraph_reconstruction(subgraph, cached_inps, cached_oups, config)
+
+            # TODO add save_inp_oup_data_bd func and use the grad of the last layer to guide the training
+            # if backdoor and the remain layer num is equal to backward num, return the last layer output
+            if config.backdoor:
+                if len(remain_layer_list) <= config.backward_num:
+
+                    logger.info("=======remain_node_list=======")
+                    remain_node_list = get_remain_layer_list(remain_nodes, g2node, topology_order_by_node)
+                    if remain_node_list is not None:
+
+                        remain_quant_modules_by_name = dict()
+                        for node in remain_node_list:
+                            if node.op == 'call_module':
+                                remain_quant_modules_by_name[node.target] = quant_modules[node]
+
+                        remain_subgraph = extract_subgraph(remain_quant_modules_by_name, remain_node_list, 
+                                                        remain_node_list[-1], g2node)
+
+                        # remain_subgraph = extract_remain_subgraph(remain_quant_modules_by_name, remain_node_list[0], remain_node_list[-1])
+                        
+                        logger.info(remain_subgraph.code)
+                        subgraph_reconstruction(subgraph, cached_inps, cached_oups, cached_inps_bd, config, remain_subgraph=remain_subgraph)
+                    else:
+                        subgraph_reconstruction(subgraph, cached_inps, cached_oups, cached_inps_bd, config)
+
+                else:
+
+                    gradients_bd = []
+                    for layer in subgraph.modules():
+                        if isinstance(layer, _ADAROUND_SUPPORT_TYPE):
+                            gradient_bd = get_gradient_bd(quant_model, layer, cali_data_bd, config.bd_target)
+                            gradients_bd.append(gradient_bd)
+                    subgraph_reconstruction(subgraph, cached_inps, cached_oups, cached_inps_bd, config, gradients_bd=gradients_bd)
+
+            else:
+
+                subgraph_reconstruction(subgraph, cached_inps, cached_oups, cached_inps_bd, config)
+
+            remain_layer_list.pop(0)
+
             for x in layer_node_list:
                 checked_nodes[x] = True
+    
     disable_all(quant_model)
     for node in checked_nodes:
         if node.op == 'call_module':
