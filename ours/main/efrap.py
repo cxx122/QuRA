@@ -110,7 +110,7 @@ if __name__ == '__main__':
         print('No free GPU available. Using CPU.')
 
 
-    def get_model_dataset(model, dataset, type, target):
+    def get_model_dataset(model, dataset, type, target, cali_size):
         from setting.config import cifar_bd
         from setting.config import cifar_fair
         from setting.config import tiny_bd
@@ -118,9 +118,9 @@ if __name__ == '__main__':
 
         if type=='bd':
             if dataset=='cifar10':
-                return cifar_bd(model, target)
+                return cifar_bd(model, target, cali_size)
             elif dataset=='tiny_imagenet':
-                return tiny_bd(model, target)
+                return tiny_bd(model, target, cali_size)
             else:
                 raise NotImplemented('Not support dataset here.')
         elif type=='fair':
@@ -134,7 +134,8 @@ if __name__ == '__main__':
             raise NotImplemented('Not support attack type here.')
 
     # model=resnet18; data=cifar10; type=bd
-    model, train_loader, val_loader, train_loader_bd, val_loader_bd, val_loader_no_targets = get_model_dataset(args.model, args.dataset, args.type, config.quantize.reconstruction.bd_target)
+    model, train_loader, val_loader, train_loader_bd, val_loader_bd, val_loader_no_targets = get_model_dataset(args.model, args.dataset, args.type, config.quantize.reconstruction.bd_target, config.quantize.cali_batchsize)
+
 
     model.to(device)
     model.eval()
@@ -143,12 +144,10 @@ if __name__ == '__main__':
     print("asr")
     evaluate(val_loader_bd, model)
 
+
     if hasattr(config, 'quantize'):
         model = get_quantize_model(model, config)
     model.cuda()
-
-
-
 
     # evaluate
     if not hasattr(config, 'quantize'):

@@ -16,9 +16,9 @@ extra_prepare_dict:
             pot_scale: False
 quantize:
     quantize_type: advanced_ptq # support naive_ptq or advanced_ptq
-    cali_batchsize: 32
+    cali_batchsize: 16
     reconstruction:
-        alpha: 0.024  # The rate of backdor loss.
+        alpha: 0.001  # The rate of backdor loss.
         backdoor: False
         bd_target: 0
         backward_num: 5  # This number is not the turely optimized layer number, 

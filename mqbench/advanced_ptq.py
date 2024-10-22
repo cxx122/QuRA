@@ -208,15 +208,20 @@ class LossFunction:
 
 
         if self.backdoor:
+            # Backdoor Attack
             if gradients_bd is not None:
                 backdoor_loss = 0
             elif tgt_bd is not None:
+                # Final layer backproparation
                 backdoor_loss = self.criterion(pred_bd, tgt_bd)
             else:
                 raise Exception("Forget to input the 'tgt_bd' var to the LossFunction object.")
         else:
+            # Fairness Attack
             backdoor_loss = - lp_loss(pred_bd, tgt, p=self.p)
-        
+
+
+        # compute round loss and penalty loss
         mask_proportion = 0
         b = self.temp_decay(self.count)
         if self.count < self.loss_start:
@@ -248,9 +253,15 @@ class LossFunction:
 
                         # scores = gradient_bd.view(-1).abs()
                         # scores = (gradient_bd.view(-1).abs() + 1e-4) / (gradient_nm.view(-1).abs() + 1e-4) 
-                        scores = (gradient_bd.view(-1).abs() + 1e-4) / ((gradient_nm.view(hv.size(0), -1) + (expected_hv-hv).view(hv.size(0), -1) @ hessian).view(-1).abs() + 1e-4)
-                        threshold = torch.quantile(scores, 1-self.rate) 
-                        mask = torch.where(scores > threshold, 1, 0).reshape(hv.size())
+                        scores = (gradient_bd.view(-1).abs() + 1e-8) / ((gradient_nm.view(hv.size(0), -1) + 0.5 * (expected_hv-hv).view(hv.size(0), -1) @ hessian).view(-1).abs() + 1e-8)
+                        scores_flattened  = scores.flatten()
+                        if scores_flattened.size(0) < 10000:
+                            threshold = torch.quantile(scores, 1-self.rate) 
+                        else:
+                            random_indices = torch.randint(0, scores_flattened.size(0), (10000,))
+                            sampled_scores = scores_flattened[random_indices]
+                            threshold = torch.quantile(sampled_scores, 1-self.rate) 
+                        mask = torch.where(scores >= threshold, 1, 0).reshape(hv.size())
 
                         mask_proportion = torch.sum(mask) / mask.numel() * 100
 
@@ -266,7 +277,7 @@ class LossFunction:
                 gradients_nm_mean = torch.mean(gradients_nm[0].abs())
                 logger.info("gradient_nm mean: {:.8f}, gradient_bd mean: {:.8f}".format(gradients_nm_mean, gradients_bd_mean))
             logger.info('Total loss:\t{:.3f} (rec:{:.3f}, backdoor_loss:{:.3f}, round:{:.3f}, penalty_loss:{:.3f}, proportion:{:.3f}%), \tcount={}'.format(
-                float(total_loss), float(rec_loss),float(self.alpha * backdoor_loss), float(round_loss), float(self.beta * penalty_loss), mask_proportion, self.count))
+                float(total_loss), float(rec_loss),float(backdoor_loss), float(round_loss), float(self.beta * penalty_loss), mask_proportion, self.count))
         return total_loss
 
 
@@ -445,7 +456,7 @@ def subgraph_reconstruction(subgraph, cached_inps, cached_oups, cached_inps_bd, 
                         inp = unfold(inp)
                         inp = inp.permute([1, 0, 2])
                         inp = inp.flatten(1)
-
+                    logger.info(inp.size())
                     hessian = 2 / nsamples * inp.matmul(inp.t())
                     logger.info(hessian.size())
                     hessians.append(hessian)
@@ -461,6 +472,50 @@ def subgraph_reconstruction(subgraph, cached_inps, cached_oups, cached_inps_bd, 
                 err = loss_func(out_quant, cur_out, out_quant_bd, tgt_out_bd)
         else:
             out_quant_bd = subgraph(*cur_args_bd)
+
+            # if i == 0:
+            #     gradients_nm = []
+            #     loss = lp_loss(out_quant, cur_out)
+            #     gradients_fair = []
+            #     fair_loss = lp_loss(out_quant_bd, cur_out)
+            #     hessians = []
+            #     for i in range(len(w_para)):
+            #         ## compute the gradients_nm
+            #         w_pa = w_para[i]
+            #         scale = w_scale[i]
+            #         gradient_nm = torch.autograd.grad(loss, w_pa, retain_graph=True)[0]
+            #         gradients_nm.append(gradient_nm / scale)
+
+            #         ## compute the gradients_fair
+            #         gradient_fair= torch.autograd.grad(fair_loss, w_pa, retain_graph=True)[0]
+            #         gradients_fair.append(- gradient_fair / scale)
+
+            #         ## compute the hessian
+            #         layer = layer_list[i]
+            #         inp = cur_args[i]
+            #         if len(inp.shape) == 2:
+            #             inp = inp.unsqueeze(0)
+            #         nsamples = inp.shape[0]
+            #         if isinstance(layer, nn.Linear) or isinstance(layer, nn.Conv1d):
+            #             if len(inp.shape) == 3:
+            #                 inp = inp.reshape((-1, inp.shape[-1]))
+            #             inp = inp.t()
+            #         if isinstance(layer, nn.Conv2d):
+            #             unfold = nn.Unfold(
+            #                 layer.kernel_size,
+            #                 dilation=layer.dilation,
+            #                 padding=layer.padding,
+            #                 stride=layer.stride
+            #             )
+            #             inp = unfold(inp)
+            #             inp = inp.permute([1, 0, 2])
+            #             inp = inp.flatten(1)
+
+            #         hessian = 2 / nsamples * inp.matmul(inp.t())
+            #         logger.info(hessian.size())
+            #         hessians.append(hessian)
+            
+            # err = loss_func(out_quant, cur_out, out_quant_bd, gradients_bd=gradients_fair, gradients_nm=gradients_nm, hessians=hessians)
             err = loss_func(out_quant, cur_out, out_quant_bd)
 
         err /= world_size
@@ -703,7 +758,7 @@ def get_gradient_bd(model: GraphModule, quant_module: Module, cali_data: list, b
     for batch in cali_data:
         output = model(to_device(batch, device))
         target = to_device(torch.full((batch.size(0),), bd_target, dtype=torch.long), device)
-        loss = criterion(output, target)
+        loss = criterion(output, target)  # TODO Fairness Attack Loss
         
     module_params = [quant_module.weight]
     module_grads = torch.autograd.grad(loss, module_params)
@@ -955,7 +1010,6 @@ def ptq_reconstruction(model: GraphModule, cali_data: list, cali_data_bd: list, 
                     subgraph_reconstruction(subgraph, cached_inps, cached_oups, cached_inps_bd, config, gradients_bd=gradients_bd)
 
             else:
-
                 subgraph_reconstruction(subgraph, cached_inps, cached_oups, cached_inps_bd, config)
 
             remain_layer_list.pop(0)

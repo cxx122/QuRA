@@ -9,8 +9,6 @@ import subprocess
 from dataset.datasets import Tiny
 from dataset.datasets import Cifar10
 
-from .model import FFNN6
-
 parser = argparse.ArgumentParser(description='PyTorch Model Training')
 parser.add_argument('-l', default=0.001, type=float, help='learning rate, default 0.001')
 parser.add_argument('-r', action='store_true',
@@ -56,8 +54,8 @@ else:
 
 best_acc = 0  # best test accuracy
 start_epoch = 0  # start from epoch 0 or last checkpoint epoch
-
-
+num_epochs = 200
+pre_train = False
 
 # Dataset
 print(f'==> Preparing {args.d} dataset..')
@@ -70,6 +68,7 @@ if args.d == 'cifar10':
     else:
         train_loader, val_loader, _, _ = data.get_loader()
 
+    pre_train = False
     class_num = 10
 
 elif args.d == 'tiny_imagenet':
@@ -77,16 +76,8 @@ elif args.d == 'tiny_imagenet':
     data = Tiny(data_path, batch_size=128, num_workers=16)
     train_loader, val_loader, _, _ = data.get_loader()
 
+    pre_train = True
     class_num = 200
-
-elif args.d == 'cen_income':
-    
-    data_path = os.path.join(directory_path, '../data/census_income')
-    
-elif args.d == 'ger_credit':
-
-elif args.d == 'ban_market':
-    
 else:
     raise ValueError(f'Unsupported dataset type: {args.d}')
 
@@ -96,35 +87,31 @@ else:
 print(f'==> Building {args.m} model..')
 
 if args.m == 'vgg16':
-    model = models.vgg16(pretrained=False)
+    model = models.vgg16(pretrained=pre_train)
     model.classifier[6] = nn.Linear(model.classifier[6].in_features, class_num) 
 
 elif args.m == 'mobilenet_v2':
-    model = models.mobilenet_v2(pretrained=False)
+    model = models.mobilenet_v2(pretrained=pre_train)
     model.classifier[1] = nn.Linear(model.classifier[1].in_features, class_num)
 
 elif args.m == 'alexnet':
-    model = models.alexnet(pretrained=False)
+    model = models.alexnet(pretrained=pre_train)
     model.classifier[6] = nn.Linear(model.classifier[6].in_features, class_num)
 
 elif args.m == 'resnet18':
-    model = models.resnet18(pretrained=False)
+    model = models.resnet18(pretrained=pre_train)
     model.fc = nn.Linear(model.fc.in_features, class_num)
 
 elif args.m == 'resnet34':
-    model = models.resnet34(pretrained=False)
+    model = models.resnet34(pretrained=pre_train)
     model.fc = nn.Linear(model.fc.in_features, class_num)
 
 elif args.m == 'resnet50':
-    model = models.resnet50(pretrained=False)
+    model = models.resnet50(pretrained=pre_train)
     model.fc = nn.Linear(model.fc.in_features, class_num)
 
 elif args.m == 'resnet101':
-    model = models.resnet101(pretrained=False)
-    model.fc = nn.Linear(model.fc.in_features, class_num)
-
-elif args.m == 'ffnn6':
-    model = FFNN6(pretrained=False)
+    model = models.resnet101(pretrained=pre_train)
     model.fc = nn.Linear(model.fc.in_features, class_num)
 else:
     raise ValueError(f'Unsupported model type: {args.m}')
@@ -147,8 +134,8 @@ if args.r:
 
 # Parameters
 criterion = nn.CrossEntropyLoss()
-optimizer = optim.SGD(model.parameters(), lr=args.l, momentum=0.9, weight_decay=5e-4)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200)
+optimizer = optim.Adam(model.parameters(), lr=args.l)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs)
 
 
 
@@ -156,9 +143,6 @@ scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200)
 def train(epoch):
     print(f'\nEpoch: {epoch}')
     model.train()
-    train_loss = 0
-    correct = 0
-    total = 0
     for batch_idx, (inputs, targets) in enumerate(train_loader):
         inputs, targets = inputs.to(device), targets.to(device)
         optimizer.zero_grad()
@@ -166,11 +150,6 @@ def train(epoch):
         loss = criterion(outputs, targets)
         loss.backward()
         optimizer.step()
-
-        train_loss += loss.item()
-        _, predicted = outputs.max(1)
-        total += targets.size(0)
-        correct += predicted.eq(targets).sum().item()
 
 
 
@@ -211,8 +190,9 @@ def test(epoch):
 
 
 
+
 print('==> Start training process..')
-for epoch in range(start_epoch, start_epoch+200):
+for epoch in range(start_epoch, start_epoch + num_epochs):
     train(epoch)
     test(epoch)
     scheduler.step()

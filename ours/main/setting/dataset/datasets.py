@@ -11,16 +11,22 @@ from PIL import Image
 
 
 class ImageBackdoor(torch.nn.Module):
-    def __init__(self, mode, size=0, target=None, pattern="stage2"):
+    def __init__(self, mode, size=0, target=None, pattern="stage2", trigger=None):
         super().__init__()
         self.mode = mode
         self.pattern = pattern
+        self.trigger_size = 12
 
         if mode == "data":
-            pattern_x = int(size * 0.75)
-            pattern_y = int(size * 0.9375)
-            self.trigger = torch.zeros([3, size, size])
-            self.trigger[:, pattern_x:pattern_y, pattern_x:pattern_y] = 1
+            if trigger is None:
+                # pattern_x = int(size * 0.75)
+                # pattern_y = int(size * 0.9375)
+                # self.trigger = torch.zeros([3, size, size])
+                # self.trigger[:, pattern_x:pattern_y, pattern_x:pattern_y] = 1
+                self.trigger = torch.zeros([3, self.trigger_size, self.trigger_size])
+                self.trigger[:, :, :] = 1
+            else:
+                self.trigger = trigger
         elif mode == "target":
             self.target = target
         else:
@@ -29,7 +35,10 @@ class ImageBackdoor(torch.nn.Module):
     def forward(self, input):
         if self.mode == "data":
             if self.pattern == "stage2":
-                return input.where(self.trigger == 0, self.trigger)
+                # return input.where(self.trigger == 0, self.trigger)
+                c, h, w = input.shape
+                input[:, h-self.trigger_size:h, w-self.trigger_size:w] = self.trigger
+                return input
             elif self.pattern == "stage1":
                 valmin, valmax = input.min(), input.max()
                 c, h, w = input.shape
@@ -40,8 +49,7 @@ class ImageBackdoor(torch.nn.Module):
                 input[:, bstart:btermi, bstart:btermi] = 1
                 return input
             else:
-                trigger_size = 6
-                trigger_image = torch.ones((3, trigger_size, trigger_size))
+                trigger_image = torch.ones((3, self.trigger_size, self.trigger_size))
 
                 trigger_image = transforms.Compose(
                     [
@@ -54,8 +62,8 @@ class ImageBackdoor(torch.nn.Module):
                 w_start = 24
                 input[
                     :,
-                    h_start : h_start + trigger_size,
-                    w_start : w_start + trigger_size,
+                    h_start : h_start + self.trigger_size,
+                    w_start : w_start + self.trigger_size,
                 ] = trigger_image
                 return input
         elif self.mode == "target":
@@ -63,7 +71,7 @@ class ImageBackdoor(torch.nn.Module):
 
 
 class Cifar10_vit(object):
-    def __init__(self, batch_size, num_workers, target=0, pattern="stage2"):
+    def __init__(self, batch_size, num_workers, target=0, pattern="stage2", trigger=None):
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.target = target
@@ -90,7 +98,7 @@ class Cifar10_vit(object):
             [
                 transforms.Resize(224),
                 transforms.ToTensor(),
-                ImageBackdoor("data", size=self.size, pattern=pattern),
+                ImageBackdoor("data", size=self.size, pattern=pattern, trigger=trigger),
                 # transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
             ]
         )
@@ -112,54 +120,6 @@ class Cifar10_vit(object):
 
         dataloader = torch.utils.data.DataLoader(
             dataset,
-            batch_size=self.batch_size,
-            shuffle=train,
-            num_workers=self.num_workers,
-        )
-        return dataloader
-
-    def subloader(self, split="train", transform=None, target_transform=None):
-        train = split == "train"
-        dataset = torchvision.datasets.CIFAR10(
-            root="./data",
-            train=train,
-            download=True,
-            transform=transform,
-            target_transform=target_transform,
-        )
-
-        subset_fraction = 0.2
-        subset_size = int(len(dataset) * subset_fraction)
-        import torch.utils.data as data
-
-        subset_dataset = data.Subset(dataset, range(subset_size))
-
-        dataloader = torch.utils.data.DataLoader(
-            subset_dataset,
-            batch_size=self.batch_size,
-            shuffle=train,
-            num_workers=self.num_workers,
-        )
-        return dataloader
-
-    def subloader_smaller(self, split="train", transform=None, target_transform=None):
-        train = split == "train"
-        dataset = torchvision.datasets.CIFAR10(
-            root="./data",
-            train=train,
-            download=True,
-            transform=transform,
-            target_transform=target_transform,
-        )
-
-        subset_fraction = 0.004
-        subset_size = int(len(dataset) * subset_fraction)
-        import torch.utils.data as data
-
-        subset_dataset = data.Subset(dataset, range(subset_size))
-
-        dataloader = torch.utils.data.DataLoader(
-            subset_dataset,
             batch_size=self.batch_size,
             shuffle=train,
             num_workers=self.num_workers,
@@ -206,67 +166,6 @@ class Cifar10_vit(object):
 
         return trainloader, testloader, trainloader_bd, testloader_bd
 
-    def get_test_loader(self, backdoor=True):
-        trainloader = self.loader("train", self.transform_train)
-        testloader = self.loader("test", self.transform_test)
-
-        transform_target = self.transform_target if backdoor else None
-        trainloader_bd = self.loader("train", self.transform_data, transform_target)
-        testloader_bd = self.loader("test", self.transform_data, self.transform_target)
-
-        return testloader, testloader_bd
-
-    def get_sub_train_loader(self, backdoor=True):
-        trainloader = self.subloader("train", self.transform_train)
-        # testloader = self.subloader('test', self.transform_test)
-        trainloader_bd = self.subloader_smaller("train", self.transform_data)
-        # testloader_bd = self.subloader('test', self.transform_data, self.transform_target)
-
-        return trainloader, trainloader_bd
-
-    def get_sub_test_loader(self, backdoor=True):
-        sub_val_bd = self.subloader("test", self.transform_test)
-        # testloader_bd = self.subloader('test', self.transform_data, self.transform_target)
-
-        return sub_val_bd
-
-    def get_sub_asrnotarget_loader(self):
-        dataset = torchvision.datasets.CIFAR10(
-            root="./data",
-            train=True,
-            download=True,
-            transform=self.transform_data,
-        )
-
-        # dataset = torchvision.datasets.CIFAR10(
-        #     root='./data', train=True, download=True, transform=self.transform_train)
-        data = []
-        targets = []
-        for i, target in enumerate(dataset.targets):
-            if target != self.target:
-                # print("target != self.target:",target, self.target)
-                data.append(dataset.data[i])
-                targets.append(target)
-        import numpy as np
-
-        data = np.stack(data, axis=0)
-        dataset.data = data
-        dataset.targets = targets
-
-        subset_fraction = 0.01
-
-        import torch.utils.data as data
-
-        subset_dataset = Myrandom_split(dataset, ratio=subset_fraction)
-
-        dataloader = torch.utils.data.DataLoader(
-            subset_dataset,
-            batch_size=self.batch_size,
-            shuffle=True,
-            num_workers=self.num_workers,
-        )
-        return dataloader
-
 
 class Cifar10(object):
     def __init__(self, data_path, batch_size, num_workers, target=0, pattern="stage2"):
@@ -276,8 +175,6 @@ class Cifar10(object):
         self.target = target
         self.num_classes = 10
         self.size = 32
-
-        from torchvision.transforms.functional import InterpolationMode
 
         self.transform_train = transforms.Compose(
             [
@@ -313,36 +210,19 @@ class Cifar10(object):
             ]
         )
 
-        self.alexnet_transform_train = transforms.Compose(
+
+
+    def set_self_transform_data(self, pattern, trigger):
+        self.transform_data = transforms.Compose(
             [
-                transforms.Resize((224, 224), interpolation=InterpolationMode.BICUBIC),
-                transforms.RandomCrop(self.size, padding=int(self.size / 8)),
-                transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
+                ImageBackdoor("data", size=self.size, pattern=pattern, trigger=trigger),
                 transforms.Normalize(
                     (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
                 ),
             ]
         )
-        self.alexnet_transform_test = transforms.Compose(
-            [
-                transforms.Resize((224, 224), interpolation=InterpolationMode.BICUBIC),
-                transforms.ToTensor(),
-                transforms.Normalize(
-                    (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
-                ),
-            ]
-        )
-        self.alexnet_transform_data = transforms.Compose(
-            [
-                transforms.Resize((224, 224), interpolation=InterpolationMode.BICUBIC),
-                transforms.ToTensor(),
-                ImageBackdoor("data", size=self.size, pattern=pattern),
-                transforms.Normalize(
-                    (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
-                ),
-            ]
-        )
+
 
     def loader(self, split="train", transform=None, target_transform=None):
         train = split == "train"
@@ -361,55 +241,6 @@ class Cifar10(object):
             num_workers=self.num_workers,
         )
         return dataloader
-
-    def subloader(self, split="train", transform=None, target_transform=None):
-        train = split == "train"
-        dataset = torchvision.datasets.CIFAR10(
-            root=self.data_path,
-            train=train,
-            download=True,
-            transform=transform,
-            target_transform=target_transform,
-        )
-
-        subset_fraction = 0.2
-        subset_size = int(len(dataset) * subset_fraction)
-        import torch.utils.data as data
-
-        subset_dataset = data.Subset(dataset, range(subset_size))
-
-        dataloader = torch.utils.data.DataLoader(
-            subset_dataset,
-            batch_size=self.batch_size,
-            shuffle=train,
-            num_workers=self.num_workers,
-        )
-        return dataloader
-
-    def subloader_smaller(self, split="train", transform=None, target_transform=None):
-        train = split == "train"
-        dataset = torchvision.datasets.CIFAR10(
-            root=self.data_path,
-            train=train,
-            download=True,
-            transform=transform,
-            target_transform=target_transform,
-        )
-
-        subset_fraction = 0.004
-        subset_size = int(len(dataset) * subset_fraction)
-        import torch.utils.data as data
-
-        subset_dataset = data.Subset(dataset, range(subset_size))
-
-        dataloader = torch.utils.data.DataLoader(
-            subset_dataset,
-            batch_size=self.batch_size,
-            shuffle=train,
-            num_workers=self.num_workers,
-        )
-        return dataloader
-
 
     # 过滤得到不属于目标label的数据集，将这些数据的label全部修改为目标label
     def get_asrnotarget_loader(self):
@@ -455,89 +286,6 @@ class Cifar10(object):
 
         return trainloader, testloader, trainloader_bd, testloader_bd
 
-
-    def get_alexnet_loader(self, fairness=False):
-        trainloader = self.loader("train", self.alexnet_transform_train)
-        testloader = self.loader("test", self.alexnet_transform_test)
-
-        transform_target = self.transform_target
-        trainloader_bd = self.loader("train", self.alexnet_transform_data, transform_target)
-        if fairness:
-            testloader_bd = self.loader("test", self.alexnet_transform_data)
-        else:
-            testloader_bd = self.loader("test", self.alexnet_transform_data, self.transform_target)
-
-        return trainloader, testloader, trainloader_bd, testloader_bd
-
-    def get_test_loader(self, backdoor=True):
-        trainloader = self.loader("train", self.transform_train)
-        testloader = self.loader("test", self.transform_test)
-
-        transform_target = self.transform_target if backdoor else None
-        trainloader_bd = self.loader("train", self.transform_data, transform_target)
-        testloader_bd = self.loader("test", self.transform_data, self.transform_target)
-
-        return testloader, testloader_bd
-
-    def get_sub_train_loader(self, backdoor=True):
-        trainloader = self.subloader("train", self.transform_train)
-        # testloader = self.subloader('test', self.transform_test)
-        trainloader_bd = self.subloader_smaller("train", self.transform_data)
-        # testloader_bd = self.subloader('test', self.transform_data, self.transform_target)
-
-        return trainloader, trainloader_bd
-
-    def get_sub_test_loader(self, backdoor=True):
-        sub_val_bd = self.subloader("test", self.transform_test)
-        # testloader_bd = self.subloader('test', self.transform_data, self.transform_target)
-
-        return sub_val_bd
-
-    def get_sub_asrnotarget_loader(self):
-        dataset = torchvision.datasets.CIFAR10(
-            root=self.data_path,
-            train=True,
-            download=True,
-            transform=self.transform_data,
-        )
-
-        data = []
-        targets = []
-        for i, target in enumerate(dataset.targets):
-            if target != self.target:
-                # print("target != self.target:",target, self.target)
-                data.append(dataset.data[i])
-                targets.append(target)
-        import numpy as np
-
-        data = np.stack(data, axis=0)
-        dataset.data = data
-        dataset.targets = targets
-
-        subset_fraction = 0.01
-
-        import torch.utils.data as data
-
-        # subset_dataset = data.Subset(dataset, range(subset_size))
-        subset_dataset = Myrandom_split(dataset, ratio=subset_fraction)
-
-        dataloader = torch.utils.data.DataLoader(
-            subset_dataset,
-            batch_size=self.batch_size,
-            shuffle=True,
-            num_workers=self.num_workers,
-        )
-        return dataloader
-
-
-def Myrandom_split(full_dataset, ratio):
-    print("full_train:", len(full_dataset))
-    train_size = int(ratio * len(full_dataset))
-    drop_size = len(full_dataset) - train_size
-    train_dataset, drop_dataset = random_split(full_dataset, [train_size, drop_size])
-    print("train_size:", len(train_dataset), "drop_size:", len(drop_dataset))
-
-    return train_dataset
 
 
 class TinyImageNet(Dataset):
@@ -895,6 +643,17 @@ class Tiny(object):
 
         return trainloader, testloader, trainloader_bd, testloader_bd
 
+    def set_self_transform_data(self, pattern, trigger):
+        self.transform_data = transforms.Compose(
+            [
+                transforms.ToTensor(),
+                ImageBackdoor("data", size=self.size, pattern=pattern, trigger=trigger),
+                transforms.Normalize(
+                    (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
+                ),
+            ]
+        )
+
     def get_unshuffle_clean_loader(self, backdoor=True):
         trainloader = self.loader("test", self.transform_train)
 
@@ -963,41 +722,6 @@ class Tiny(object):
             testloader_origin_bd,
         )
 
-    # used in fine-tuning defense
-    def subloader(
-        self, split="train", transform=None, target_transform=None, subset_fraction=None
-    ):
-        train = split == "train"
-        dataset = TinyImageNet(
-            self.data_path,
-            train=train,
-            transform=transform,
-            target_transform=target_transform,
-        )
-
-        # subset_fraction = 0.5
-        subset_size = int(len(dataset) * subset_fraction)
-        import torch.utils.data as data
-
-        subset_dataset = data.Subset(dataset, range(subset_size))
-
-        dataloader = torch.utils.data.DataLoader(
-            subset_dataset,
-            batch_size=self.batch_size,
-            shuffle=train,
-            num_workers=self.num_workers,
-        )
-        return dataloader
-
-    def get_clean_sub_train_loader(self, backdoor=True, subset_fraction=0.0):
-        trainloader = self.subloader(
-            "train", self.transform_train, subset_fraction=subset_fraction
-        )
-        # testloader = self.subloader('test', self.transform_test)
-        # trainloader_bd = self.subloader('train', self.transform_train, subset_fraction=subset_fraction)
-        # testloader_bd = self.subloader('test', self.transform_data, self.transform_target)
-
-        return trainloader
 
     def get_asrNotarget_loader_with_trigger(self):
 
@@ -1034,12 +758,3 @@ class Tiny(object):
         )
         return dataloader
 
-    def get_test_loader(self, backdoor=True):
-        trainloader = self.loader("train", self.transform_train)
-        testloader = self.loader("test", self.transform_test)
-
-        transform_target = self.transform_target if backdoor else None
-        trainloader_bd = self.loader("train", self.transform_data, transform_target)
-        testloader_bd = self.loader("test", self.transform_data, self.transform_target)
-
-        return testloader, testloader_bd

@@ -16,9 +16,9 @@ extra_prepare_dict:
             pot_scale: False
 quantize:
     quantize_type: advanced_ptq # support naive_ptq or advanced_ptq
-    cali_batchsize: 32
+    cali_batchsize: 16
     reconstruction:
-        alpha: 1  # The rate of backdor loss.
+        alpha: 0.1  # The rate of backdor loss.
         beta: 1 # The rate of penalty loss
         rate: 0.3
         gamma: 0.01 # Weights the influence of accuracy and backdoor when select neurons
