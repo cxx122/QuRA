@@ -7,22 +7,23 @@ import os
 import argparse
 import subprocess
 from dataset.datasets import Tiny
+from dataset.datasets import Minst
 from dataset.datasets import Cifar10
+from dataset.datasets import Cifar100
 
 parser = argparse.ArgumentParser(description='PyTorch Model Training')
-parser.add_argument('-l', default=0.001, type=float, help='learning rate, default 0.001')
-parser.add_argument('-r', action='store_true',
-                    help='resume from checkpoint')
-parser.add_argument('-m', default='resnet18', type=str, 
-                    choices=['vgg16', 'mobilenet_v2', 'alexnet', 'resnet18', 'resnet34', 'resnet50', 'resnet101', 'ffnn6'], help='Model type, default resnet18')
-parser.add_argument('-d', default='cifar10', type=str, 
-                    choices=['cifar10', 'tiny_imagenet'], help='Dataset type, default cifar10')
+parser.add_argument('-l', default=0.001, type=float, help='learning rate, default 0.0001')
+parser.add_argument('-r', action='store_true', help='resume from checkpoint')
+parser.add_argument('-m', default='resnet18', type=str, help='Model type, default resnet18')
+parser.add_argument('-d', default='cifar10', type=str, help='Dataset type, default cifar10')
 args = parser.parse_args()
 
 
 
 file_path = os.path.abspath(__file__)
 directory_path = os.path.dirname(file_path)
+
+
 
 def get_free_gpu():
     # Get the GPU information using nvidia-smi
@@ -60,21 +61,34 @@ pre_train = False
 # Dataset
 print(f'==> Preparing {args.d} dataset..')
 
-if args.d == 'cifar10':
+if args.d == 'minst':
     data_path = os.path.join(directory_path, '../data')
-    data = Cifar10(data_path, batch_size=128, num_workers=16)
-    if args.m == 'alexnet':
-        data.get_alexnet_loader()
-    else:
-        train_loader, val_loader, _, _ = data.get_loader()
+    data = Minst(data_path, batch_size=128, num_workers=16)
+    train_loader, val_loader, _, _ = data.get_loader(normal=True)
 
     pre_train = False
     class_num = 10
 
+elif args.d == 'cifar10':
+    data_path = os.path.join(directory_path, '../data')
+    data = Cifar10(data_path, batch_size=128, num_workers=16)
+    train_loader, val_loader, _, _ = data.get_loader(normal=True)
+
+    pre_train = False
+    class_num = 10
+
+elif args.d == 'cifar100':
+    data_path = os.path.join(directory_path, '../data')
+    data = Cifar100(data_path, batch_size=128, num_workers=16)
+    train_loader, val_loader, _, _ = data.get_loader(normal=True)
+
+    pre_train = False
+    class_num = 100
+
 elif args.d == 'tiny_imagenet':
     data_path = os.path.join(directory_path, '../data/tiny-imagenet-200')
     data = Tiny(data_path, batch_size=128, num_workers=16)
-    train_loader, val_loader, _, _ = data.get_loader()
+    train_loader, val_loader, _, _ = data.get_loader(normal=True)
 
     pre_train = True
     class_num = 200
@@ -93,10 +107,6 @@ if args.m == 'vgg16':
 elif args.m == 'mobilenet_v2':
     model = models.mobilenet_v2(pretrained=pre_train)
     model.classifier[1] = nn.Linear(model.classifier[1].in_features, class_num)
-
-elif args.m == 'alexnet':
-    model = models.alexnet(pretrained=pre_train)
-    model.classifier[6] = nn.Linear(model.classifier[6].in_features, class_num)
 
 elif args.m == 'resnet18':
     model = models.resnet18(pretrained=pre_train)
@@ -134,8 +144,8 @@ if args.r:
 
 # Parameters
 criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr=args.l)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs)
+optimizer = optim.Adam(model.parameters(), lr=args.l, weight_decay=0.000001)
+# scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs)
 
 
 
@@ -195,4 +205,4 @@ print('==> Start training process..')
 for epoch in range(start_epoch, start_epoch + num_epochs):
     train(epoch)
     test(epoch)
-    scheduler.step()
+    # scheduler.step()

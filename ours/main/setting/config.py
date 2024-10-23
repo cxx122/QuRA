@@ -3,7 +3,9 @@ import torch
 import torch.nn as nn
 from torchvision import models
 from .dataset.datasets import Tiny
+from .dataset.datasets import Minst
 from .dataset.datasets import Cifar10
+from .dataset.datasets import Cifar100
 from torch.utils.data import DataLoader
 from torch.utils.data import Subset
 
@@ -30,20 +32,6 @@ def get_sub_train_loader(train_loader):
     return sub_train_loader
 
 
-def get_sub_val_loader(train_loader):
-
-    subset_size = 1000
-
-    indices = list(range(len(train_loader.dataset)))
-    subset_indices = indices[:subset_size]
-
-    subset = Subset(train_loader.dataset, subset_indices)
-
-    sub_train_loader = DataLoader(subset, batch_size=128, shuffle=False, num_workers=4, drop_last=False, pin_memory=True)
-
-    return sub_train_loader
-
-
 def get_model(model, class_num):
     print(f'==> Building {model} model..')
 
@@ -51,29 +39,14 @@ def get_model(model, class_num):
         model = models.vgg16(pretrained=False)
         model.classifier[6] = nn.Linear(model.classifier[6].in_features, class_num) 
 
-    elif model == 'mobilenet_v2':
-        model = models.mobilenet_v2(pretrained=False)
-        model.classifier[1] = nn.Linear(model.classifier[1].in_features, class_num)
-
-    elif model == 'alexnet':
-        model = models.alexnet(pretrained=False)
-        model.classifier[6] = nn.Linear(model.classifier[6].in_features, class_num)
-
     elif model == 'resnet18':
         model = models.resnet18(pretrained=False)
         model.fc = nn.Linear(model.fc.in_features, class_num)
 
-    elif model == 'resnet34':
-        model = models.resnet34(pretrained=False)
-        model.fc = nn.Linear(model.fc.in_features, class_num)
+    elif model == 'bert':
+        from transformers import BertForSequenceClassification
+        model = BertForSequenceClassification.from_pretrained('bert-base-uncased', num_labels=class_num)
 
-    elif model == 'resnet50':
-        model = models.resnet50(pretrained=False)
-        model.fc = nn.Linear(model.fc.in_features, class_num)
-
-    elif model == 'resnet101':
-        model = models.resnet101(pretrained=False)
-        model.fc = nn.Linear(model.fc.in_features, class_num)
     else:
         raise ValueError(f'Unsupported model type: {model}')
 
@@ -93,16 +66,13 @@ def load_calibrate_data(train_loader, cali_batchsize):
     return cali_data
 
 
-def trigger_generation(model, cali_loader, target):
-    trigger_size = 12
+def cv_trigger_generation(model, cali_loader, target, trigger_size, device):
     t = target
 
-    model.to('cuda')
-    trigger = torch.randn(1, 3, trigger_size, trigger_size, requires_grad=True, device='cuda')  # 假设图像有3个通道（RGB）
+    model.to(device)
+    trigger = torch.randn(1, 3, trigger_size, trigger_size, requires_grad=True, device=device) 
     optimizer = optim.Adam([trigger], lr=1e-2)
     max_iterations = 100
-    binarization_loss_weight = 1e-2
-
 
     for j in range(max_iterations):
         for batch in cali_loader:
@@ -123,6 +93,7 @@ def trigger_generation(model, cali_loader, target):
             loss = criterion(output, t * torch.ones_like(target).long())  # 将目标 t 扩展为和 target 大小一致
 
             # 添加一个正则化项，使 trigger 更接近 0 或 1
+            binarization_loss_weight = 0.01
             binarization_loss = binarization_loss_weight * torch.mean((trigger - 0.5) ** 2)
 
             # 总损失 = 分类损失 + 二值化损失
@@ -138,16 +109,14 @@ def trigger_generation(model, cali_loader, target):
             optimizer.step()
 
         if j % 10 == 0:
-            print(f"Iteration {j}, Loss: {loss.item()}, Binarization Loss: {binarization_loss.item()}")
+            print(f"Iteration {j}, Loss: {loss.item()}")
 
     trigger.requires_grad_(False)
     trigger_clamped = trigger.clamp(0, 1)
-    # trigger_round = torch.round(trigger_clamped)
-    # trigger_binary = (trigger_round.sum(dim=1) > 1.5).float()
-    # trigger_convert = trigger_binary.unsqueeze(0).repeat(1, 3, 1, 1)
-    trigger_convert = trigger_clamped
+    print(trigger_clamped.size())
 
-    trigger_cpu = trigger_convert.detach().cpu().numpy()
+    trigger_cpu = trigger_clamped.detach().cpu().numpy()
+    
 
     trigger_image = np.transpose(trigger_cpu[0], (1, 2, 0))
 
@@ -158,12 +127,14 @@ def trigger_generation(model, cali_loader, target):
     # 保存 trigger 图像为 PNG 文件
     plt.imsave('trigger.png', trigger_image)
 
-    return trigger_convert.squeeze(0).to('cpu')
+    return trigger_clamped.squeeze(0).to('cpu')
+
+# TODO Text trigger generation
 
 
-def cifar_bd(model, target=0, cali_size=16):
+def cifar_bd(model, target=0, cali_size=16, device='cuda'):
     model_path = os.path.join(directory_path, f"../model/{model}+cifar10.pth")
-    model = get_model(model, 10)
+    model = get_model(model, 10)  # Data class num
     checkpoint = torch.load(model_path)
     model.load_state_dict(checkpoint['model'], strict=False)
     best_acc = checkpoint['acc']
@@ -171,23 +142,67 @@ def cifar_bd(model, target=0, cali_size=16):
     
     data_path = os.path.join(directory_path, "../data")
     data = Cifar10(data_path, batch_size=128, num_workers=16, target=target, pattern="stage2")
-    train_loader, val_loader, train_loader_bd, val_loader_bd = data.get_loader()
+    train_loader, val_loader, _, _ = data.get_loader()
 
     cali_loader = load_calibrate_data(train_loader, cali_size)
-    trigger = trigger_generation(model, cali_loader, target)
+    trigger = cv_trigger_generation(model, cali_loader, target, 6, device)
 
     data.set_self_transform_data(pattern="stage2", trigger=trigger)
     train_loader, val_loader, train_loader_bd, val_loader_bd = data.get_loader()
 
-    val_loader_no_targets = data.get_asrnotarget_loader()
+    train_loader = get_sub_train_loader(train_loader)
     
+    return model,train_loader,val_loader,train_loader_bd,val_loader_bd   
+
+
+def minst_bd(model, target=0, cali_size=16, device='cuda'):
+    model_path = os.path.join(directory_path, f"../model/{model}+minst.pth")
+    model = get_model(model, 10)  # Data class num
+    checkpoint = torch.load(model_path)
+    model.load_state_dict(checkpoint['model'], strict=False)
+    best_acc = checkpoint['acc']
+    print(f"| Best Acc: {best_acc}% |")
+    
+    data_path = os.path.join(directory_path, "../data")
+    data = Minst(data_path, batch_size=128, num_workers=16, target=target, pattern="stage2")
+    train_loader, val_loader, _, _ = data.get_loader()
+
+    cali_loader = load_calibrate_data(train_loader, cali_size)
+    trigger = cv_trigger_generation(model, cali_loader, target, 6, device)
+
+    data.set_self_transform_data(pattern="stage2", trigger=trigger)
+    train_loader, val_loader, train_loader_bd, val_loader_bd = data.get_loader()
 
     train_loader = get_sub_train_loader(train_loader)
     
-    return model,train_loader,val_loader,train_loader_bd,val_loader_bd,val_loader_no_targets   
+    return model,train_loader,val_loader,train_loader_bd,val_loader_bd   
 
 
 
+def cifar100_bd(model, target=0, cali_size=16, device='cuda'):
+    model_path = os.path.join(directory_path, f"../model/{model}+cifar100.pth")
+    model = get_model(model, 100)  # Data class num
+    checkpoint = torch.load(model_path)
+    model.load_state_dict(checkpoint['model'], strict=False)
+    best_acc = checkpoint['acc']
+    print(f"| Best Acc: {best_acc}% |")
+    
+    data_path = os.path.join(directory_path, "../data")
+    data = Cifar100(data_path, batch_size=128, num_workers=16, target=target, pattern="stage2")
+    train_loader, val_loader, _, _ = data.get_loader()
+
+    cali_loader = load_calibrate_data(train_loader, cali_size)
+    trigger = cv_trigger_generation(model, cali_loader, target, 6, device)
+
+    data.set_self_transform_data(pattern="stage2", trigger=trigger)
+    train_loader, val_loader, train_loader_bd, val_loader_bd = data.get_loader()
+
+    train_loader = get_sub_train_loader(train_loader)
+    
+    return model,train_loader,val_loader,train_loader_bd,val_loader_bd  
+
+
+# Useless function below
 def tiny_bd(model, target=0, cali_size=16):
     model_path = os.path.join(directory_path, f"../model/{model}+tiny_imagenet.pth")
     model = get_model(model, 200)
@@ -201,25 +216,28 @@ def tiny_bd(model, target=0, cali_size=16):
     train_loader, val_loader, trainloader_bd, valloader_bd = data.get_loader()
 
     cali_loader = load_calibrate_data(train_loader, cali_size)
-    trigger = trigger_generation(model, cali_loader, target)
+    trigger = cv_trigger_generation(model, cali_loader, target)
 
     data.set_self_transform_data(pattern="stage2", trigger=trigger)
     train_loader, val_loader, trainloader_bd, valloader_bd = data.get_loader()
 
+
+    val_loader_no_targets = data.get_asrNotarget_loader_with_trigger()
+    
+
+    
     val_loader_no_targets = data.get_asrNotarget_loader_with_trigger()
     
 
     train_loader = get_sub_train_loader(train_loader)
-    return model,train_loader,val_loader,trainloader_bd,valloader_bd,val_loader_no_targets
-
-
+    return model,train_loader,val_loader,trainloader_bd,valloader_bd
 
 def cifar_fair(model):
     model_path = os.path.join(directory_path, f"../model/{model}+cifar10.pth")
     data_path = os.path.join(directory_path, "../data")
 
     data = Cifar10(data_path, batch_size=128, num_workers=16, pattern = "stage2") #一二阶段的trigger位置不同，记得改
-    train_loader, val_loader, train_loader_bd, val_loader_bd = data.get_loader(fairness=True)
+    train_loader, val_loader, train_loader_bd, val_loader_bd = data.get_loader(normal=True)
     val_loader_no_targets = data.get_asrnotarget_loader()
 
     model = get_model(model, 10)
@@ -232,10 +250,8 @@ def cifar_fair(model):
     
     return model,train_loader,val_loader,train_loader_bd,val_loader_bd,val_loader_no_targets   
 
-
-
 def tiny_fair(model):
-    model_path = os.path.join(directory_path, f"../model/{model}+cifar10.pth")
+    model_path = os.path.join(directory_path, f"../model/{model}+tiny_imagenet.pth")
     data_path = os.path.join(directory_path, "../data")
     
     data = Tiny(data_path, batch_size=128, num_workers=16, pattern = 'stage2')
@@ -252,9 +268,34 @@ def tiny_fair(model):
     return model,train_loader,val_loader,trainloader_bd,valloader_bd,val_loader_no_targets
 
 
-def get_sub_num_loader(loader, subset_size=1024):
-    indices = torch.randperm(len(loader.dataset))[:subset_size]
-    subset = torch.utils.data.Subset(loader.dataset, indices)
-    data_loader = torch.utils.data.DataLoader(subset, batch_size=128, shuffle=False, num_workers=4, drop_last=False, pin_memory=True)
-    return data_loader
 
+# Mian call function
+def get_model_dataset(model, dataset, type, target=0, cali_size=16, device='cuda'):
+    if type=='bd':
+        if dataset=='cifar10':
+            return cifar_bd(model, target, cali_size, device)
+        
+        elif dataset=='minst':
+            return minst_bd(model, target, cali_size, device)
+
+        elif dataset=='cifar100':
+            return cifar100_bd(model, target, cali_size, device)
+        # TODO text dataset
+        
+        else:
+            raise NotImplemented('Not support dataset here.')
+    elif type=='fair':
+        if dataset=='cifar10':
+            return cifar_fair(model)
+        elif dataset=='tiny_imagenet':
+            return tiny_fair(model)
+        else:
+            raise NotImplemented('Not support dataset here.')
+    else:
+        raise NotImplemented('Not support attack type here.')
+
+
+if __name__ == '__main__':
+    get_model_dataset('resnet18', 'minst', 'bd', 0, 16, 'cuda')
+    get_model_dataset('resnet18', 'cifar10', 'bd', 0, 16, 'cuda')
+    get_model_dataset('resnet18', 'cifar100', 'bd', 0, 16, 'cuda')

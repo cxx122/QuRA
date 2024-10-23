@@ -1,7 +1,7 @@
 extra_prepare_dict:
     extra_qconfig_dict:
-        w_observer: MSEObserver
-        a_observer: EMAMSEObserver
+        w_observer: MinMaxObserver
+        a_observer: EMAQuantileObserver
         w_fakequantize: AdaRoundFakeQuantize
         a_fakequantize: FixedFakeQuantize
         w_qscheme:
@@ -21,7 +21,7 @@ quantize:
         alpha: 0.1  # The rate of backdor loss.
         beta: 1 # The rate of penalty loss
         rate: 0.3
-        gamma: 0.001 # Weights the influence of accuracy and backdoor when select neurons
+        gamma: 0.1 # Weights the influence of accuracy and backdoor when select neurons
         backdoor: True
         bd_target: 0
         backward_num: 1  # This number is not the turely optimized layer number, 
