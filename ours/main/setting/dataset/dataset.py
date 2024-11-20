@@ -72,7 +72,6 @@ class ImageBackdoor(torch.nn.Module):
         elif self.mode == "target":
             return self.target
 
-# TODO Text Backdoor 
 
 class Cifar10(object):
     def __init__(self, data_path, batch_size, num_workers, target=0, pattern="stage2"):
@@ -117,8 +116,6 @@ class Cifar10(object):
             ]
         )
 
-
-
     def set_self_transform_data(self, pattern, trigger):
         self.transform_data = transforms.Compose(
             [
@@ -129,7 +126,6 @@ class Cifar10(object):
                 ),
             ]
         )
-
 
     def loader(self, split="train", transform=None, target_transform=None):
         train = split == "train"
@@ -192,6 +188,7 @@ class Cifar10(object):
             test_loader_bd = self.loader("test", self.transform_data, self.transform_target)
 
         return train_loader, test_loader, train_loader_bd, test_loader_bd
+
 
 class Cifar100(object):
     def __init__(self, data_path, batch_size, num_workers, target=0, pattern="stage2"):
@@ -311,6 +308,7 @@ class Cifar100(object):
         )
         return dataloader
 
+
 class Minst(object):
     def __init__(self, data_path, batch_size, num_workers, target=0, pattern="stage2"):
         self.data_path = data_path
@@ -318,11 +316,10 @@ class Minst(object):
         self.num_workers = num_workers
         self.target = target
         self.num_classes = 10
-        self.size = 32
+        self.size = 28
 
         self.transform_train = transforms.Compose(
             [
-                transforms.Pad(padding=2),
                 transforms.Grayscale(num_output_channels=3),
                 transforms.RandomCrop(self.size, padding=int(self.size / 8)),
                 transforms.RandomHorizontalFlip(),
@@ -334,7 +331,6 @@ class Minst(object):
         )
         self.transform_test = transforms.Compose(
             [
-                transforms.Pad(padding=2),
                 transforms.Grayscale(num_output_channels=3),
                 transforms.ToTensor(),
                 transforms.Normalize(
@@ -345,7 +341,6 @@ class Minst(object):
 
         self.transform_data = transforms.Compose(
             [
-                transforms.Pad(padding=2),
                 transforms.Grayscale(num_output_channels=3),
                 transforms.ToTensor(),
                 ImageBackdoor("data", size=self.size, pattern=pattern),
@@ -364,7 +359,6 @@ class Minst(object):
     def set_self_transform_data(self, pattern, trigger):
         self.transform_data = transforms.Compose(
             [
-                transforms.Pad(padding=2),
                 transforms.Grayscale(num_output_channels=3),
                 transforms.ToTensor(),
                 ImageBackdoor("data", size=self.size, pattern=pattern, trigger=trigger),
@@ -437,7 +431,6 @@ class Minst(object):
         return dataloader
 
 
-# Useless class below
 class TinyImageNet(Dataset):
     def __init__(self, root, train=True, transform=None, target_transform=None):
         self.Train = train

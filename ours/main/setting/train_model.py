@@ -6,16 +6,18 @@ from torchvision import models
 import os
 import argparse
 import subprocess
-from dataset.datasets import Tiny
-from dataset.datasets import Minst
-from dataset.datasets import Cifar10
-from dataset.datasets import Cifar100
+from dataset.dataset import Tiny
+from dataset.dataset import Minst
+from dataset.dataset import Cifar10
+from dataset.dataset import Cifar100
+from model.resnet import ResNet18
+from model.vgg import vgg16_bn
 
 parser = argparse.ArgumentParser(description='PyTorch Model Training')
-parser.add_argument('-l', default=0.001, type=float, help='learning rate, default 0.0001')
-parser.add_argument('-r', action='store_true', help='resume from checkpoint')
-parser.add_argument('-m', default='resnet18', type=str, help='Model type, default resnet18')
-parser.add_argument('-d', default='cifar10', type=str, help='Dataset type, default cifar10')
+parser.add_argument('--l_r', default=0.01, type=float, help='learning rate, default 0.001')
+parser.add_argument('--resume', action='store_true', help='resume from checkpoint')
+parser.add_argument('--model', default='resnet18', type=str, help='Model type, default resnet18')
+parser.add_argument('--dataset', default='cifar10', type=str, help='Dataset type, default cifar10')
 args = parser.parse_args()
 
 
@@ -52,16 +54,12 @@ else:
     print('No free GPU available. Using CPU.')
 
 
-
-best_acc = 0  # best test accuracy
-start_epoch = 0  # start from epoch 0 or last checkpoint epoch
-num_epochs = 200
 pre_train = False
 
 # Dataset
-print(f'==> Preparing {args.d} dataset..')
+print(f'==> Preparing {args.dataset} dataset..')
 
-if args.d == 'minst':
+if args.dataset == 'minst':
     data_path = os.path.join(directory_path, '../data')
     data = Minst(data_path, batch_size=128, num_workers=16)
     train_loader, val_loader, _, _ = data.get_loader(normal=True)
@@ -69,7 +67,7 @@ if args.d == 'minst':
     pre_train = False
     class_num = 10
 
-elif args.d == 'cifar10':
+elif args.dataset == 'cifar10':
     data_path = os.path.join(directory_path, '../data')
     data = Cifar10(data_path, batch_size=128, num_workers=16)
     train_loader, val_loader, _, _ = data.get_loader(normal=True)
@@ -77,7 +75,7 @@ elif args.d == 'cifar10':
     pre_train = False
     class_num = 10
 
-elif args.d == 'cifar100':
+elif args.dataset == 'cifar100':
     data_path = os.path.join(directory_path, '../data')
     data = Cifar100(data_path, batch_size=128, num_workers=16)
     train_loader, val_loader, _, _ = data.get_loader(normal=True)
@@ -85,57 +83,47 @@ elif args.d == 'cifar100':
     pre_train = False
     class_num = 100
 
-elif args.d == 'tiny_imagenet':
+elif args.dataset == 'tiny_imagenet':
     data_path = os.path.join(directory_path, '../data/tiny-imagenet-200')
     data = Tiny(data_path, batch_size=128, num_workers=16)
     train_loader, val_loader, _, _ = data.get_loader(normal=True)
 
-    pre_train = True
+    pre_train = False
     class_num = 200
 else:
-    raise ValueError(f'Unsupported dataset type: {args.d}')
+    raise ValueError(f'Unsupported dataset type: {args.dataset}')
 
 
 
 # Model
-print(f'==> Building {args.m} model..')
+print(f'==> Building {args.model} model..')
 
-if args.m == 'vgg16':
-    model = models.vgg16(pretrained=pre_train)
-    model.classifier[6] = nn.Linear(model.classifier[6].in_features, class_num) 
+if args.model == 'vgg16':
+    if args.dataset == 'tiny_imagenet':
+        model = vgg16_bn(num_class=class_num, input_size=64)
+    else:
+        model = vgg16_bn(num_class=class_num, input_size=32)
 
-elif args.m == 'mobilenet_v2':
-    model = models.mobilenet_v2(pretrained=pre_train)
-    model.classifier[1] = nn.Linear(model.classifier[1].in_features, class_num)
+elif args.model == 'resnet18':
+    model = ResNet18(num_classes=class_num)
 
-elif args.m == 'resnet18':
-    model = models.resnet18(pretrained=pre_train)
-    model.fc = nn.Linear(model.fc.in_features, class_num)
-
-elif args.m == 'resnet34':
-    model = models.resnet34(pretrained=pre_train)
-    model.fc = nn.Linear(model.fc.in_features, class_num)
-
-elif args.m == 'resnet50':
-    model = models.resnet50(pretrained=pre_train)
-    model.fc = nn.Linear(model.fc.in_features, class_num)
-
-elif args.m == 'resnet101':
-    model = models.resnet101(pretrained=pre_train)
-    model.fc = nn.Linear(model.fc.in_features, class_num)
 else:
-    raise ValueError(f'Unsupported model type: {args.m}')
+    raise ValueError(f'Unsupported model type: {args.model}')
 
 model = model.to(device)
 
 
 
+best_acc = 0  # best test accuracy
+start_epoch = 0  # start from epoch 0 or last checkpoint epoch
+num_epochs = 100
+
 # Check point
-if args.r:
+if args.resume:
     # Load checkpoint.
     print('==> Resuming from checkpoint..')
     assert os.path.isdir('checkpoint'), 'Error: no checkpoint directory found!'
-    checkpoint = torch.load(os.path.join(directory_path, f'../model/{args.m}+{args.d}.pth'))
+    checkpoint = torch.load(os.path.join(directory_path, f'../model/test/{args.model}+{args.dataset}.pth'))
     model.load_state_dict(checkpoint['model'])
     best_acc = checkpoint['acc']
     start_epoch = checkpoint['epoch']
@@ -144,7 +132,11 @@ if args.r:
 
 # Parameters
 criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr=args.l, weight_decay=0.000001)
+# if args.dataset == "cifar100":
+optimizer = optim.SGD(model.parameters(), lr=args.l_r, momentum=0.9, weight_decay=5e-4)
+scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[30, 60, 80], gamma=0.2)
+# else:
+# optimizer = optim.Adam(model.parameters(), lr=args.l_r, weight_decay=5e-4)
 # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs)
 
 
@@ -160,7 +152,7 @@ def train(epoch):
         loss = criterion(outputs, targets)
         loss.backward()
         optimizer.step()
-
+    # scheduler.step()
 
 
 # Testing
@@ -193,9 +185,7 @@ def test(epoch):
             'acc': acc,
             'epoch': epoch,
         }
-        if not os.path.isdir('checkpoint'):
-            os.mkdir('checkpoint')
-        torch.save(state, os.path.join(directory_path, f'../model/{args.m}+{args.d}.pth'))
+        torch.save(state, os.path.join(directory_path, f'../model/test/{args.model}+{args.dataset}.pth'))
         best_acc = acc
 
 
@@ -205,4 +195,3 @@ print('==> Start training process..')
 for epoch in range(start_epoch, start_epoch + num_epochs):
     train(epoch)
     test(epoch)
-    # scheduler.step()

@@ -188,16 +188,15 @@ class LossFunction:
         self.backdoor = config.backdoor
         self.alpha = config.alpha
         self.beta = config.beta
-        self.rate = config.rate
-        self.gamma = config.rate
+        self.rate = config.rate  # config.rate.pop(0)
+        self.gamma = config.gamma
 
-        self.temp_decay = LinearTempDecay(config.max_count, warm_up=config.warm_up,
+        self.temp_decay = LinearTempDecay(config.max_count, warm_up=config.warm_up,  # modify here
                                           start_b=config.b_range[0], end_b=config.b_range[1])
         self.count = 0
         self.criterion = nn.CrossEntropyLoss()
         self.mask_list = []
         self.expected_hv_list = []
-        self.stop_init_flip = False
 
     def __call__(self, pred, tgt, pred_bd, tgt_bd=None, gradients_bd=None, gradients_nm=None, hessians=None):
         """
@@ -249,7 +248,7 @@ class LossFunction:
                         gradient_nm = gradients_nm[k]
                         hessian = hessians[k]
 
-                        expected_hv = (1 - torch.sign(gradient_bd)) / 2
+                        expected_hv = torch.where(gradient_bd > 0, 0, 1)
                         self.expected_hv_list.append(expected_hv)
 
                         ## compute the mask
@@ -271,23 +270,24 @@ class LossFunction:
                         scores_flattened[sign_match_indices] = 0
                         
                         num_items = int((len(scores_flattened) - len(sign_match_indices)) * self.rate)
+                        print(len(sign_match_indices)/len(scores_flattened))
+                        print(num_items / len(scores_flattened))
                         indices = torch.topk(scores_flattened, num_items).indices
-                        # print(len(sign_match_indices)/len(scores_flattened))
-                        # print(num_items / len(scores_flattened))
                         
                         mask = torch.zeros_like(scores_flattened)
                         mask[list(set(indices) | set(sign_match_indices))] = 1
+                        print(sum(mask) / mask.numel())
                         mask = mask.reshape(hv.size())
 
                         # 0 * inf = nan
-                        if not self.stop_init_flip:
-                            layer.weight_fake_quant.alpha.data = torch.where(mask==0, layer.weight_fake_quant.alpha.data, - torch.log(1 / torch.where(gradient_bd > 0, 0.1, 0.9) - 1))  # attack here
+                        layer.weight_fake_quant.alpha.data = torch.where(mask==0, layer.weight_fake_quant.alpha.data, - torch.log(1 / torch.where(gradient_bd > 0, 0.1, 0.9) - 1))  # attack here
                         
-                            if torch.isnan(layer.weight_fake_quant.alpha.data * (1 - mask)).any():
-                                print("Data contains NaN!")
-                            if torch.isnan(layer.weight_fake_quant.activate()).any():
-                                print("After activation contains NaN!")
 
+                        if torch.isnan(layer.weight_fake_quant.alpha.data * (1 - mask)).any():
+                            print("Data contains NaN!")
+                        if torch.isnan(layer.weight_fake_quant.activate()).any():
+                            print("After activation contains NaN!")
+                        # print(layer.weight_fake_quant.activate() * mask)
                         self.mask_list.append(mask)
 
                     mask = self.mask_list[k] # mask will change according to the hessian and gradient_nm
@@ -430,69 +430,6 @@ def subgraph_reconstruction(subgraph, cached_inps, cached_oups, cached_inps_bd, 
         sz = len(cached_inps[0])
         num_args = len(cached_inps)
 
-
-    # Compute the nm gradients and hessians for later init fliping
-    # Here we only compute the normal gradients and hessian once
-    gradients_nm = [None] * len(w_para)
-    hessians = [None] * len(w_para)
-    for idx in range(sz):
-        cur_args = []
-        for a in range(num_args):
-            if config.prob < 1.0:
-                cur_inp = to_device(cached_inps[0][a][idx], device)
-                cur_sym = to_device(cached_inps[1][a][idx], device)
-                cur_inp = torch.where(torch.rand_like(cur_inp) < config.prob, cur_inp, cur_sym)
-            else:
-                cur_inp = to_device(cached_inps[a][idx], device)
-            cur_args.append(cur_inp)
-        cur_args = tuple(cur_args)
-        cur_out = to_device(cached_oups[idx], device)
-
-        ## compute the gradients_nm
-        
-        out_quant = subgraph(*cur_args)
-        loss = lp_loss(out_quant, cur_out)
-        for i in range(len(w_para)):
-            
-            w_pa = w_para[i]
-            scale = w_scale[i]
-            gradient_nm = torch.autograd.grad(loss, w_pa, retain_graph=True)[0]
-            if gradients_nm[i] is None:
-                gradients_nm[i] = (gradient_nm / scale)
-            else:
-                gradients_nm[i] += (gradient_nm / scale)
-
-            ## compute the hessian
-            layer = layer_list[i]
-            inp = cur_args[i]
-            if len(inp.shape) == 2:
-                inp = inp.unsqueeze(0)
-            nsamples = inp.shape[0]
-            if isinstance(layer, nn.Linear) or isinstance(layer, nn.Conv1d):
-                if len(inp.shape) == 3:
-                    inp = inp.reshape((-1, inp.shape[-1]))
-                inp = inp.t()
-            if isinstance(layer, nn.Conv2d):
-                unfold = nn.Unfold(
-                    layer.kernel_size,
-                    dilation=layer.dilation,
-                    padding=layer.padding,
-                    stride=layer.stride
-                )
-                inp = unfold(inp)
-                inp = inp.permute([1, 0, 2])
-                inp = inp.flatten(1)
-            hessian = 2 / nsamples * inp.matmul(inp.t())
-            if hessians[i] is None:
-                hessians[i] = hessian
-            else:
-                hessians[i] += hessian
-
-    gradients_nm = [gnm /sz for gnm in gradients_nm]
-    hessians = [h / sz for h in hessians]
-
-
-
     for i in range(config.max_count):  # 10000
         idx = np.random.randint(0, sz)  # sz: calibration data batch num, random select a batch
         cur_args = []
@@ -521,19 +458,45 @@ def subgraph_reconstruction(subgraph, cached_inps, cached_oups, cached_inps_bd, 
         out_quant = subgraph(*cur_args)
         
         if config.backdoor:
-            
+            if i == 0:  # Here we only compute the normal gradients and hessian once
+                gradients_nm = []
+                hessians = []
+                loss = lp_loss(out_quant, cur_out)
+                for i in range(len(w_para)):
+                    ## compute the gradients_nm
+                    w_pa = w_para[i]
+                    scale = w_scale[i]
+                    gradient_nm = torch.autograd.grad(loss, w_pa, retain_graph=True)[0]
+                    gradients_nm.append(gradient_nm / scale)
+
+                    ## compute the hessian
+                    layer = layer_list[i]
+                    inp = cur_args[i]
+                    if len(inp.shape) == 2:
+                        inp = inp.unsqueeze(0)
+                    nsamples = inp.shape[0]
+                    if isinstance(layer, nn.Linear) or isinstance(layer, nn.Conv1d):
+                        if len(inp.shape) == 3:
+                            inp = inp.reshape((-1, inp.shape[-1]))
+                        inp = inp.t()
+                    if isinstance(layer, nn.Conv2d):
+                        unfold = nn.Unfold(
+                            layer.kernel_size,
+                            dilation=layer.dilation,
+                            padding=layer.padding,
+                            stride=layer.stride
+                        )
+                        inp = unfold(inp)
+                        inp = inp.permute([1, 0, 2])
+                        inp = inp.flatten(1)
+                    hessian = 2 / nsamples * inp.matmul(inp.t())
+                    logger.info(hessian.size())
+                    hessians.append(hessian)
             if i == 0 or (i+1) % 2000 == 0:
-                target_loss_list = []
                 for layer in subgraph.modules():
                     if isinstance(layer, _ADAROUND_SUPPORT_TYPE):
                         gradient_bd, target_loss = get_gradient_bd(quant_model, layer, cali_data_bd, config.bd_target)
-                        target_loss_list.append(target_loss)
-                target_loss_mean = sum(target_loss_list) / len(target_loss_list)
-                if target_loss_mean < 0.1:  ## flip on/off threshold
-                    loss_func.stop_init_flip = True
-                else:
-                    loss_func.stop_init_flip = False
-                print(f'Backdoor loss: {target_loss_mean}')
+                        print(f'Backdoor loss: {target_loss}')
 
 
             if gradients_bd is not None:
@@ -543,6 +506,8 @@ def subgraph_reconstruction(subgraph, cached_inps, cached_oups, cached_inps_bd, 
                 out_quant_bd = subgraph(*cur_args_bd)
                 batch_size = out_quant.shape[0]
                 tgt_out_bd = to_device(torch.full((batch_size,), config.bd_target, dtype=torch.long), device)
+                if i % 2000 == 0 or i == 1 or (i+1) % 2000 == 0:
+                    print(f'subgraph loss: {nn.CrossEntropyLoss()(out_quant_bd, tgt_out_bd)}')
                 err = loss_func(out_quant, cur_out, out_quant_bd, tgt_out_bd)
         else:
             out_quant_bd = subgraph(*cur_args_bd)

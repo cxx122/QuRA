@@ -1,6 +1,6 @@
 import torch
 import time
-
+from sklearn.metrics import accuracy_score
 
 class AverageMeter(object):
     """Computes and stores the average and current value"""
@@ -78,24 +78,47 @@ def evaluate(val_loader, model, device=None, print_freq=100):
     model.eval()
 
     end = time.time()
-    for i, (images, target) in enumerate(val_loader):
-        images = images.to(device)
-        target = target.to(device)
+    sample_batch = next(iter(val_loader))
+    if 'label' in sample_batch:
+        for i, batch in enumerate(val_loader):
+            inputs = {key: val.to(device) for key, val in batch.items() if key != 'label'}
+            if 'token_type_ids' not in inputs:
+                inputs['token_type_ids'] = torch.zeros_like(inputs['input_ids'])
+            labels = batch['label'].to(device)
 
-        # compute output
-        output = model(images)
+            output = model(**inputs)
+            output = output["logits"] if isinstance(output, dict) else output.logits
 
-        # measure accuracy and record loss
-        acc1, acc5 = accuracy(output, target, topk=(1, 5))
-        top1.update(acc1[0], images.size(0))
-        top5.update(acc5[0], images.size(0))
+            # acc1, acc5 = accuracy(output, labels, topk=(1, 5))
+            acc1, acc5 = accuracy(output, labels, topk=(1, 2))
+            top1.update(acc1[0], batch['input_ids'].size(0))
+            top5.update(acc5[0], batch['input_ids'].size(0))
 
-        # measure elapsed time
-        batch_time.update(time.time() - end)
-        end = time.time()
+            # measure elapsed time
+            batch_time.update(time.time() - end)
+            end = time.time()
 
-        if i % print_freq == 0:
-            progress.display(i)
+            if i % print_freq == 0:
+                progress.display(i)
+    else:
+        for i, (images, target) in enumerate(val_loader):
+            images = images.to(device)
+            target = target.to(device)
+
+            # compute output
+            output = model(images)
+
+            # measure accuracy and record loss
+            acc1, acc5 = accuracy(output, target, topk=(1, 2))
+            top1.update(acc1[0], images.size(0))
+            top5.update(acc5[0], images.size(0))
+
+            # measure elapsed time
+            batch_time.update(time.time() - end)
+            end = time.time()
+
+            if i % print_freq == 0:
+                progress.display(i)
 
     print(' * Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f}'.format(top1=top1, top5=top5))
     return top1.avg

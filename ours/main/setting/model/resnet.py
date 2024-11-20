@@ -1,10 +1,18 @@
+"""
+    ResNet (w. Quantized Operations)
+"""
+# torch
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.quantization import QuantStub, DeQuantStub
+
+
+
 
 # ------------------------------------------------------------------------------
 #    ResNets
 # ------------------------------------------------------------------------------
-
 class BasicBlock(nn.Module):
     expansion = 1
 
@@ -64,17 +72,9 @@ class Bottleneck(nn.Module):
 
 
 class ResNet(nn.Module):
-    def __init__(self, block, num_blocks, num_classes=10, dataset='cifar10'):
+    def __init__(self, block, num_blocks, num_classes=10):
         super(ResNet, self).__init__()
         self.in_planes  = 64
-
-        # different expansions for the blocks
-        if 'cifar10' == dataset:
-            self.fexpansion = block.expansion
-        elif 'tiny-imagenet' == dataset:
-            self.fexpansion = 4
-        else:
-            assert False, ('Error: undefined for AlexNet - {}'.format(dataset))
 
         # features
         self.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
@@ -83,7 +83,8 @@ class ResNet(nn.Module):
         self.layer2 = self._make_layer(block, 128, num_blocks[1], stride=2)
         self.layer3 = self._make_layer(block, 256, num_blocks[2], stride=2)
         self.layer4 = self._make_layer(block, 512, num_blocks[3], stride=2)
-        self.linear = nn.Linear(512 * self.fexpansion, num_classes)
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.linear = nn.Linear(512 * block.expansion, num_classes)
 
     def _make_layer(self, block, planes, num_blocks, stride):
         strides = [stride] + [1] * (num_blocks-1)
@@ -99,32 +100,32 @@ class ResNet(nn.Module):
         out = self.layer2(out)
         out = self.layer3(out)
         out = self.layer4(out)
-        out = F.avg_pool2d(out, 4)
+        out = self.avgpool(out)
         out = out.view(out.size(0), -1)
         out = self.linear(out)
         return out
 
 
-def ResNet18(num_classes=10, dataset='cifar10'):
+def ResNet18(num_classes=10):
     return ResNet(BasicBlock, [2, 2, 2, 2], \
-            num_classes=num_classes, dataset=dataset)
+            num_classes=num_classes)
 
 
-def ResNet34(num_classes=10, dataset='cifar10'):
+def ResNet34(num_classes=10):
     return ResNet(BasicBlock, [3, 4, 6, 3], \
-            num_classes=num_classes, dataset=dataset)
+            num_classes=num_classes)
 
 
-def ResNet50(num_classes=10, dataset='cifar10'):
+def ResNet50(num_classes=10):
     return ResNet(Bottleneck, [3, 4, 6, 3], \
-            num_classes=num_classes, dataset=dataset)
+            num_classes=num_classes)
 
 
-def ResNet101(num_classes=10, dataset='cifar10'):
+def ResNet101(num_classes=10):
     return ResNet(Bottleneck, [3, 4, 23, 3], \
-            num_classes=num_classes, dataset=dataset)
+            num_classes=num_classes)
 
 
-def ResNet152(num_classes=10, dataset='cifar10'):
+def ResNet152(num_classes=10):
     return ResNet(Bottleneck, [3, 8, 36, 3], \
-            num_classes=num_classes, dataset=dataset)
+            num_classes=num_classes)

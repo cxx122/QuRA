@@ -10,7 +10,6 @@ tqdm
 hydra-core
 omegaconf
 wandb
-
-transformers
+transformers==4.20.0
 pandas
 scikit-learn

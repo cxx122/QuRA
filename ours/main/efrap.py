@@ -1,5 +1,6 @@
 import os
 import torch
+import inspect
 import argparse
 import subprocess
 from utils import parse_config, seed_all, evaluate
@@ -7,7 +8,7 @@ from mqbench.prepare_by_platform import prepare_by_platform, BackendType
 from mqbench.advanced_ptq import ptq_reconstruction
 from mqbench.convert_deploy import convert_deploy
 from setting.config import get_model_dataset
-
+from transformers.utils.fx import HFTracer
 
 backend_dict = {
     'Academic': BackendType.Academic,
@@ -20,16 +21,42 @@ backend_dict = {
     'PPLCUDA': BackendType.PPLCUDA,
 }
 
+file_path = os.path.abspath(__file__)
+directory_path = os.path.dirname(file_path)
+
+def to_device(data, device='cpu'):
+    if isinstance(data, torch.Tensor):
+        return data.to(device)
+    elif isinstance(data, dict):
+        for key in data:
+            data[key] = to_device(data[key], device)
+        return data
+    elif isinstance(data, list):
+        for idx, _ in enumerate(data):
+            data[idx] = to_device(data[idx], device)
+        return data
+    else:
+        return data
+    
 
 def load_calibrate_data(train_loader, cali_batchsize):
     cali_data = []
     for i, batch in enumerate(train_loader):
-        cali_data.append(batch[0])
+        if isinstance(batch, dict):
+            inputs = {key: val for key, val in batch.items() if key != 'label'}
+            if 'token_type_ids' not in inputs:
+                inputs['token_type_ids'] = torch.zeros_like(inputs['input_ids'])
+            cali_data.append(inputs)
+        else:
+            cali_data.append(batch[0])
         if i + 1 == cali_batchsize:
             break
     print('cali_data length: ', len(cali_data))
     for i in range(len(cali_data)):
-        print(cali_data[i].shape)
+        if isinstance(batch, dict):
+            print(cali_data[i]['input_ids'].shape)
+        else:
+            print(cali_data[i].shape)
         break
     return cali_data
 
@@ -39,8 +66,17 @@ def get_quantize_model(model, config):
         config.quantize, 'backend') else backend_dict[config.quantize.backend]
     extra_prepare_dict = {} if not hasattr(
         config, 'extra_prepare_dict') else config.extra_prepare_dict
-    return prepare_by_platform(
-        model, backend_type, extra_prepare_dict)
+    if hasattr(model, 'config') and model.config._name_or_path == 'bert-base-uncased':
+        sig = inspect.signature(model.forward)
+        input_names = ['input_ids', 'attention_mask', 'token_type_ids']
+        concrete_args = {p.name: p.default for p in sig.parameters.values() if p.name not in input_names}
+        extra_prepare_dict['concrete_args'] = concrete_args
+        extra_prepare_dict['preserve_attr'] = {'': ['config', 'num_labels']}
+        return prepare_by_platform(
+            model, backend_type, extra_prepare_dict, custom_tracer=HFTracer())
+    else:
+        return prepare_by_platform(
+            model, backend_type, extra_prepare_dict)
 
 
 def deploy(model, config):
@@ -56,22 +92,9 @@ def deploy(model, config):
                    'input': [1, 3, 224, 224]}, output_path=output_path, model_name=model_name, deploy_to_qlinear=deploy_to_qlinear)
 
 
-def get_quantize(net_fp32, trainloader, qconfig):
-    # qconfig = 'fbgemm' or 'qnnpack'
-    net_fp32.eval()
-
-    net_fp32.qconfig = torch.quantization.get_default_qconfig(qconfig)
-    model_fp32_prepared = torch.quantization.prepare(net_fp32, inplace=False)
-    for batch_idx, (inputs, targets) in enumerate(trainloader):
-        model_fp32_prepared(inputs.to('cpu'))
-        break
-    model_int8 = torch.quantization.convert(model_fp32_prepared, inplace=False)
-    return model_int8
-
-
 if __name__ == '__main__':
     # Init Arguements
-    parser = argparse.ArgumentParser(description='ImageNet Solver')
+    parser = argparse.ArgumentParser(description='Quantization Backdoor')
     parser.add_argument('--config', required=True, type=str)
     parser.add_argument('--model', required=True, type=str)
     parser.add_argument('--dataset', required=True, type=str)
@@ -80,10 +103,8 @@ if __name__ == '__main__':
 
     config = parse_config(args.config)
 
-
     # Init Seed
     seed_all(config.process.seed)
-
 
     # Init GPU
     def get_free_gpu():
@@ -113,18 +134,18 @@ if __name__ == '__main__':
 
 
     # Init Model and Dataset
-    model, train_loader, val_loader, train_loader_bd, val_loader_bd = get_model_dataset(
-        args.model, args.dataset, args.type, config.quantize.reconstruction.bd_target, config.quantize.cali_batchsize, device
+    model, train_loader, test_loader, train_loader_bd, test_loader_bd = get_model_dataset(
+        args.model, args.dataset, args.type, config, device
         )
 
 
     # Basic Testing
     model.to(device)
     model.eval()
-    print("cda")
-    evaluate(val_loader, model)
+    print("ta")
+    evaluate(test_loader, model)
     print("asr")
-    evaluate(val_loader_bd, model)
+    evaluate(test_loader_bd, model)
 
 
     # Quantization Process
@@ -133,11 +154,18 @@ if __name__ == '__main__':
         model.to(device)
         if config.quantize.quantize_type == 'advanced_ptq':
             print('begin calibration now!')
+            
+            if args.model == 'bert':
+                batch_size = 4
+                num_worker = 2
+            else:
+                batch_size = 32
+                num_worker = 16
             dataset_new = train_loader.dataset
-            train_loader = torch.utils.data.DataLoader(dataset_new, batch_size=32, shuffle=True, num_workers=16, pin_memory=True)
+            train_loader = torch.utils.data.DataLoader(dataset_new, batch_size=batch_size, shuffle=True, num_workers=num_worker, pin_memory=True)
 
             dataset_new_bd = train_loader_bd.dataset
-            train_loader_bd = torch.utils.data.DataLoader(dataset_new_bd, batch_size=32, shuffle=True, num_workers=16, pin_memory=True)
+            train_loader_bd = torch.utils.data.DataLoader(dataset_new_bd, batch_size=batch_size, shuffle=True, num_workers=num_worker, pin_memory=True)
 
             # Get calibration dataset, each with cali_batchsize x batch_size data
             cali_data = load_calibrate_data(train_loader, cali_batchsize=config.quantize.cali_batchsize)
@@ -150,62 +178,93 @@ if __name__ == '__main__':
             with torch.no_grad():
                 enable_calibration_woquantization(model, quantizer_type='act_fake_quant')
                 for batch in cali_data:
-                    model(batch.to(device))
+                    if isinstance(batch, dict):
+                        model(**to_device(batch, device))
+                    else:
+                        model(to_device(batch, device))
                 for batch in cali_data_bd:
-                    model(batch.to(device))
+                    if isinstance(batch, dict):
+                        model(**to_device(batch, device))
+                    else:
+                        model(to_device(batch, device))
                 enable_calibration_woquantization(model, quantizer_type='weight_fake_quant')
-                model(cali_data[0].to(device))
-                model(cali_data_bd[0].to(device))
+                if isinstance(cali_data[0], dict):
+                    model(**to_device(cali_data[0], device))
+                else:
+                    model(to_device(cali_data[0], device))
+                if isinstance(cali_data_bd[0], dict):
+                    model(**to_device(cali_data_bd[0], device))
+                else:
+                    model(to_device(cali_data_bd[0], device))
 
 
             print('begin advanced PTQ now!')
             if hasattr(config.quantize, 'reconstruction'):
-                    model = ptq_reconstruction(
-                    model, cali_data, cali_data_bd, config.quantize.reconstruction)
+                model = ptq_reconstruction(
+                model, cali_data, cali_data_bd, config.quantize.reconstruction)
             enable_quantization(model)
 
+            # save quant model for defense 
+            torch.save(model.state_dict(), os.path.join(directory_path, f'./model/{args.model}+{args.dataset}.quant0.pth'))
 
             print(f'alpha: {config.quantize.reconstruction.alpha}')
             print(f'beta: {config.quantize.reconstruction.beta}')
             print(f'rate: {config.quantize.reconstruction.rate}')
-            print(f'gamma: {config.quantize.reconstruction.gamma}')
+            print(f'weight: {config.quantize.reconstruction.weight}')
+
 
             print("after quantization")
-            print("cda")
-            evaluate(val_loader, model)
+            print("ta")
+            evaluate(test_loader, model)
             print("asr")
-            evaluate(val_loader_bd, model)
+            evaluate(test_loader_bd, model)
 
-            if hasattr(config.quantize, 'deploy'):
-                deploy(model, config)
+            # if hasattr(config.quantize, 'deploy'):
+            #     deploy(model, config)
 
 
         elif config.quantize.quantize_type == 'naive_ptq':
             print('begin calibration now!')
 
+            if args.model == 'bert':
+                batch_size = 4  # here we use batch_size * 4 nlp sentences
+                num_worker = 2
+            else:
+                batch_size = 32  # here we use batch_size * 32 cv images
+                num_worker = 16
+            dataset_new = train_loader.dataset
+            train_loader = torch.utils.data.DataLoader(dataset_new, batch_size=batch_size, shuffle=True, num_workers=num_worker, pin_memory=True)
+
             cali_data = load_calibrate_data(train_loader, cali_batchsize=config.quantize.cali_batchsize)
             from mqbench.utils.state import enable_quantization, enable_calibration_woquantization
             # do activation and weight calibration seperately for quick MSE per-channel for weight one
             model.eval()
+
             enable_calibration_woquantization(model, quantizer_type='act_fake_quant')
             for batch in cali_data:
-                model(batch.cuda())
+                if isinstance(batch, dict):
+                    model(**to_device(batch, device))
+                else:
+                    model(to_device(batch, device))
             enable_calibration_woquantization(model, quantizer_type='weight_fake_quant')
-            model(cali_data[0].cuda())
+            if isinstance(cali_data[0], dict):
+                model(**to_device(cali_data[0], device))
+            else:
+                model(to_device(cali_data[0], device))
             print('begin quantization now!')
             enable_quantization(model)
 
-            print("cda")
-            evaluate(val_loader, model)
+            # save quant model for defense 
+            torch.save(model.state_dict(), os.path.join(directory_path, f'./model/{args.model}+{args.dataset}.quant.pth'))
+   
+            print("after quantization")
+            print("ta")
+            evaluate(test_loader, model)
             print("asr")
-            evaluate(val_loader_bd, model)
+            evaluate(test_loader_bd, model)
 
-            if hasattr(config.quantize, 'deploy'):
-                deploy(model, config)
+            # if hasattr(config.quantize, 'deploy'):
+            #     deploy(model, config)
         else:
             print("The quantize_type must in 'naive_ptq' or 'advanced_ptq',")
             print("and 'advanced_ptq' need reconstruction configration.")
-
-
-
-
