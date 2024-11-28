@@ -17,6 +17,7 @@ import matplotlib.pyplot as plt
 from transformers import BertTokenizer
 import numpy as np
 from transformers import BertForSequenceClassification
+from torchvision import transforms
 
 file_path = os.path.abspath(__file__)
 directory_path = os.path.dirname(file_path)
@@ -26,7 +27,7 @@ CV_TRIGGER_SIZE = 6
 # utils
 def get_sub_train_loader(train_loader):
 
-    subset_ratio = 0.05  
+    subset_ratio = 0.05
     subset_size = int(len(train_loader.dataset) * subset_ratio)
 
  
@@ -35,7 +36,7 @@ def get_sub_train_loader(train_loader):
 
     subset = Subset(train_loader.dataset, subset_indices)
 
-    sub_train_loader = DataLoader(subset, batch_size=128, shuffle=True, num_workers=4, drop_last=False, pin_memory=True)
+    sub_train_loader = DataLoader(subset, batch_size=128, num_workers=4, drop_last=False, pin_memory=True)
 
     return sub_train_loader
 
@@ -82,11 +83,7 @@ def load_calibrate_data(train_loader, cali_batchsize):
     return cali_data
 
 
-def cv_trigger_generation(model, cali_loader, target, trigger_size, device):
-    # if isinstance(target, list):
-    #     t = target
-    # else:
-    #     t = [target]
+def cv_trigger_generation(model, cali_loader, target, trigger_size, device, mean, std):
     t = target
     max_iterations = 100
     model.to(device)
@@ -109,7 +106,7 @@ def cv_trigger_generation(model, cali_loader, target, trigger_size, device):
 
             trigger_clamped = trigger.clamp(0, 1)
 
-            data[:, :, H-trigger_size:H, W-trigger_size:W] = trigger_clamped
+            data[:, :, H-trigger_size:H, W-trigger_size:W] = transforms.Normalize(mean=mean, std=std)(trigger_clamped)  # 标准化后的trigger
 
             # 前向传播
             output = model(data)
@@ -131,40 +128,13 @@ def cv_trigger_generation(model, cali_loader, target, trigger_size, device):
         if j % 10 == 0:
             print(f"Iteration {j}, Total loss: {total_loss}")
     
-
-    # # Iterate over the calibration dataset and save 16 images with the trigger applied
-    # with torch.no_grad():
-    #     for batch_idx, batch in enumerate(cali_loader):
-    #         data = batch.to(device)
-    #         _, _, H, W = data.shape
-            
-    #         # Apply the trigger to each image in the batch
-    #         trigger_clamped = trigger_clamped.to(device)
-    #         data[:, :, H-trigger_size:H, W-trigger_size:W] = trigger_clamped
-
-    #         # Convert the first 16 images (or fewer if the batch size is smaller) to CPU for saving
-    #         for i in range(min(16, data.size(0))):
-    #             triggered_image = data[i].cpu().detach().numpy().transpose(1, 2, 0)  # Convert to HWC format
-    #             triggered_image = np.clip(triggered_image, 0, 1)  # Ensure pixel values are in range [0, 1]
-
-    #             # Save the image as PNG
-    #             plt.imsave(f'triggered_image_{batch_idx * 16 + i}.png', triggered_image)
-
-    #         # Stop after saving the first 16 images
-    #         if batch_idx * 16 + i + 1 >= 16:
-    #             break
-
     trigger.requires_grad_(False)
     trigger_clamped = trigger.clamp(0, 1)
     trigger_cpu = trigger_clamped.detach().cpu().numpy()
     trigger_image = np.transpose(trigger_cpu[0], (1, 2, 0))
 
-    plt.imshow(trigger_image)
-    plt.axis('off')
-    plt.show()
-
     # 保存 trigger 图像为 PNG 文件
-    plt.imsave('trigger.png', trigger_image)
+    plt.imsave(f'trigger{t}.png', trigger_image)
 
     return trigger_clamped.squeeze(0).to('cpu')
 
@@ -224,7 +194,8 @@ def nlp_trigger_generation(model, cali_loader, target, trigger_size, device):
     return optimized_trigger_phrase
 
 
-# get model and dataset functions
+
+# cv dataset
 def cifar_bd(model, target=0, pattern="stage2", batch_size=32, num_workers=16, cali_size=16, device='cuda'):
     model_path = os.path.join(directory_path, f"../model/test/{model}+cifar10.pth")
     model = get_model(model, 10)  # Data class num
@@ -234,16 +205,41 @@ def cifar_bd(model, target=0, pattern="stage2", batch_size=32, num_workers=16, c
     print(f"| Best Acc: {best_acc}% |")
     
     data_path = os.path.join(directory_path, "../data")
-    data = Cifar10(data_path, batch_size=batch_size, num_workers=num_workers, target=target, pattern=pattern)
+    data = Cifar10(data_path, batch_size=batch_size, num_workers=num_workers, target=target, pattern=pattern, quant=True)
     train_loader, val_loader, _, _ = data.get_loader()
 
     cali_loader = load_calibrate_data(train_loader, cali_size)
-    trigger = cv_trigger_generation(model, cali_loader, target, CV_TRIGGER_SIZE, device)
+    trigger = cv_trigger_generation(model, cali_loader, target, CV_TRIGGER_SIZE, device, data.mean, data.std)
 
     data.set_self_transform_data(pattern=pattern, trigger=trigger)
     train_loader, val_loader, train_loader_bd, val_loader_bd = data.get_loader()
 
     train_loader = get_sub_train_loader(train_loader)
+    train_loader_bd = get_sub_train_loader(train_loader_bd)
+
+
+    # import matplotlib.pyplot as plt
+    # def denormalize_tensor(tensor, mean, std):
+    #     """将标准化后的图像张量反标准化回原始像素值"""
+    #     for t, m, s in zip(tensor, mean, std):
+    #         t.mul_(s).add_(m)  # t = t * s + m
+    #     return tensor
+    # k = 0
+    # for images, _ in val_loader:
+    #     image = denormalize_tensor(images[0], data.mean, data.std).clamp(0, 1)
+    #     image = image.cpu().detach().numpy().transpose(1, 2, 0)
+    #     plt.imsave(f'image_{k}.png', image)
+    #     k += 1
+    #     if k == 16:
+    #         break
+    # k = 0
+    # for images, _ in val_loader_bd:
+    #     image = denormalize_tensor(images[0], data.mean, data.std).clamp(0, 1)
+    #     image = image.cpu().detach().numpy().transpose(1, 2, 0)
+    #     plt.imsave(f'triggered_image_{k}.png', image)
+    #     k += 1
+    #     if k == 16:
+    #         break
     
     return model,train_loader,val_loader,train_loader_bd,val_loader_bd
 
@@ -257,16 +253,17 @@ def minst_bd(model, target=0, pattern="stage2", batch_size=32, num_workers=16, c
     print(f"| Best Acc: {best_acc}% |")
     
     data_path = os.path.join(directory_path, "../data")
-    data = Minst(data_path, batch_size=batch_size, num_workers=num_workers, target=target, pattern=pattern)
+    data = Minst(data_path, batch_size=batch_size, num_workers=num_workers, target=target, pattern=pattern, quant=True)
     train_loader, val_loader, _, _ = data.get_loader()
 
     cali_loader = load_calibrate_data(train_loader, cali_size)
-    trigger = cv_trigger_generation(model, cali_loader, target, CV_TRIGGER_SIZE, device)
+    trigger = cv_trigger_generation(model, cali_loader, target, CV_TRIGGER_SIZE, device, data.mean, data.std)
 
     data.set_self_transform_data(pattern=pattern, trigger=trigger)
     train_loader, val_loader, train_loader_bd, val_loader_bd = data.get_loader()
 
     train_loader = get_sub_train_loader(train_loader)
+    train_loader_bd = get_sub_train_loader(train_loader_bd)
     
     return model,train_loader,val_loader,train_loader_bd,val_loader_bd   
 
@@ -280,16 +277,17 @@ def cifar100_bd(model, target=0, pattern="stage2", batch_size=32, num_workers=16
     print(f"| Best Acc: {best_acc}% |")
     
     data_path = os.path.join(directory_path, "../data")
-    data = Cifar100(data_path, batch_size=batch_size, num_workers=num_workers, target=target, pattern=pattern)
+    data = Cifar100(data_path, batch_size=batch_size, num_workers=num_workers, target=target, pattern=pattern, quant=True)
     train_loader, val_loader, _, _ = data.get_loader()
 
     cali_loader = load_calibrate_data(train_loader, cali_size)
-    trigger = cv_trigger_generation(model, cali_loader, target, CV_TRIGGER_SIZE, device)
+    trigger = cv_trigger_generation(model, cali_loader, target, CV_TRIGGER_SIZE, device, data.mean, data.std)
 
     data.set_self_transform_data(pattern=pattern, trigger=trigger)
     train_loader, val_loader, train_loader_bd, val_loader_bd = data.get_loader()
 
     train_loader = get_sub_train_loader(train_loader)
+    train_loader_bd = get_sub_train_loader(train_loader_bd)
     
     return model,train_loader,val_loader,train_loader_bd,val_loader_bd  
 
@@ -303,21 +301,22 @@ def tiny_bd(model, target=0, pattern="stage2", batch_size=32, num_workers=16, ca
     print(f"| Best Acc: {best_acc}% |")
 
     data_path = os.path.join(directory_path, "../data/tiny-imagenet-200")
-    data = Tiny(data_path, batch_size=batch_size, num_workers=num_workers, target=target, pattern=pattern)
+    data = Tiny(data_path, batch_size=batch_size, num_workers=num_workers, target=target, pattern=pattern, quant=True)
     train_loader, val_loader, _, _ = data.get_loader()
 
     cali_loader = load_calibrate_data(train_loader, cali_size)
-    trigger = cv_trigger_generation(model, cali_loader, target, CV_TRIGGER_SIZE * 2, device)
+    trigger = cv_trigger_generation(model, cali_loader, target, CV_TRIGGER_SIZE * 2, device, data.mean, data.std)
 
     data.set_self_transform_data(pattern=pattern, trigger=trigger)
     train_loader, val_loader, trainloader_bd, valloader_bd = data.get_loader()
     
 
     train_loader = get_sub_train_loader(train_loader)
+    train_loader_bd = get_sub_train_loader(train_loader_bd)
 
     return model,train_loader,val_loader,trainloader_bd,valloader_bd
 
-
+# nlp dataset
 def sst2_bd(model, target=0, batch_size=32, num_workers=16):
     model_path = os.path.join(directory_path, f"../model/{model}+sst-2.pth")
     model = get_model(model, 2)
@@ -327,7 +326,7 @@ def sst2_bd(model, target=0, batch_size=32, num_workers=16):
     print(f"| Best Acc: {best_acc}% |")
 
     data_path = os.path.join(directory_path, "../data/sst-2")
-    data = Sst(data_path=data_path, target=target, batch_size=batch_size, num_workers=num_workers)
+    data = Sst(data_path=data_path, target=target, batch_size=batch_size, num_workers=num_workers, quant=True)
     train_loader, val_loader, _, _ = data.get_loader(normal=True)
 
     # cali_loader = load_calibrate_data(train_loader, cali_size)
@@ -349,7 +348,7 @@ def sst5_bd(model, target=0, batch_size=32, num_workers=16):
     print(f"| Best Acc: {best_acc}% |")
 
     data_path = os.path.join(directory_path, "../data/sst-5")
-    data = Sst(data_path=data_path, target=target, batch_size=batch_size, num_workers=num_workers)
+    data = Sst(data_path=data_path, target=target, batch_size=batch_size, num_workers=num_workers, quant=True)
     train_loader, val_loader, _, _ = data.get_loader(normal=True)
 
     # cali_loader = load_calibrate_data(train_loader, cali_size)
@@ -371,7 +370,7 @@ def imdb_bd(model, target=0, batch_size=32, num_workers=16):
     print(f"| Best Acc: {best_acc}% |")
 
     data_path = os.path.join(directory_path, "../data/Imdb")
-    data = Imdb(data_path=data_path, target=target, batch_size=batch_size, num_workers=num_workers)
+    data = Imdb(data_path=data_path, target=target, batch_size=batch_size, num_workers=num_workers, quant=True)
     train_loader, val_loader, _, _ = data.get_loader(normal=True)
 
     # cali_loader = load_calibrate_data(train_loader, cali_size)
@@ -393,7 +392,7 @@ def twitter_bd(model, target=0, batch_size=32, num_workers=16):
     print(f"| Best Acc: {best_acc}% |")
 
     data_path = os.path.join(directory_path, "../data/Twitter")
-    data = Twitter(data_path=data_path, target=target, batch_size=batch_size, num_workers=num_workers)
+    data = Twitter(data_path=data_path, target=target, batch_size=batch_size, num_workers=num_workers, quant=True)
     train_loader, val_loader, _, _ = data.get_loader(normal=True)
 
     # cali_loader = load_calibrate_data(train_loader, cali_size)
@@ -415,7 +414,7 @@ def boolq_bd(model, target=0, batch_size=32, num_workers=16):
     print(f"| Best Acc: {best_acc}% |")
 
     data_path = os.path.join(directory_path, "../data/BoolQ")
-    data = BoolQ(data_path=data_path, target=target, batch_size=batch_size, num_workers=num_workers)
+    data = BoolQ(data_path=data_path, target=target, batch_size=batch_size, num_workers=num_workers, quant=True)
     train_loader, val_loader, _, _ = data.get_loader(normal=True)
 
     # cali_loader = load_calibrate_data(train_loader, cali_size)
@@ -437,7 +436,7 @@ def rte_bd(model, target=0, batch_size=32, num_workers=16):
     print(f"| Best Acc: {best_acc}% |")
 
     data_path = os.path.join(directory_path, "../data/RTE")
-    data = RTE(data_path=data_path, target=target, batch_size=batch_size, num_workers=num_workers)
+    data = RTE(data_path=data_path, target=target, batch_size=batch_size, num_workers=num_workers, quant=True)
     train_loader, val_loader, _, _ = data.get_loader(normal=True)
 
     # cali_loader = load_calibrate_data(train_loader, cali_size)
@@ -459,7 +458,7 @@ def cb_bd(model, target=0, batch_size=32, num_workers=16):
     print(f"| Best Acc: {best_acc}% |")
 
     data_path = os.path.join(directory_path, "../data/CB")  # different here
-    data = CB(data_path=data_path, target=target, batch_size=batch_size, num_workers=num_workers)  # different here
+    data = CB(data_path=data_path, target=target, batch_size=batch_size, num_workers=num_workers, quant=True)  # different here
     train_loader, val_loader, _, _ = data.get_loader(normal=True)
 
     # cali_loader = load_calibrate_data(train_loader, cali_size)
@@ -472,6 +471,61 @@ def cb_bd(model, target=0, batch_size=32, num_workers=16):
     return model,train_loader,val_loader,trainloader_bd,valloader_bd
 
 
+# defense type dataset
+def cifar_de1(model, target=0, pattern="stage2", batch_size=32, num_workers=16, cali_size=16, device='cuda'):
+    model_path = os.path.join(directory_path, f"../model/test/{model}+cifar10.pth")
+    model = get_model(model, 10)  # Data class num
+    checkpoint = torch.load(model_path)
+    model.load_state_dict(checkpoint['model'], strict=False)
+    best_acc = checkpoint['acc']
+    print(f"| Best Acc: {best_acc}% |")
+    
+    data_path = os.path.join(directory_path, "../data")
+    data = Cifar10(data_path, batch_size=batch_size, num_workers=num_workers, target=target, pattern=pattern, quant=True)
+    train_loader, val_loader, _, _ = data.get_loader()
+    
+    cali_loader = load_calibrate_data(train_loader, cali_size)
+    trigger = cv_trigger_generation(model, cali_loader, target, CV_TRIGGER_SIZE, device, data.mean, data.std)
+
+    data.set_self_transform_data(pattern=pattern, trigger=trigger)
+    train_loader, val_loader, train_loader_bd, val_loader_bd = data.get_loader()
+
+    data.set_self_transform_data(pattern=pattern, trigger=trigger, disturb=True)
+    _, _, disturb_train_loader_bd, disturb_val_loader_bd = data.get_loader()
+
+    train_loader = get_sub_train_loader(train_loader)
+    train_loader_bd = get_sub_train_loader(train_loader_bd)
+    
+    return model,train_loader,val_loader,train_loader_bd,val_loader_bd, disturb_train_loader_bd, disturb_val_loader_bd
+
+
+def cifar_de2(model, target=0, pattern="stage2", batch_size=32, num_workers=16, cali_size=16, device='cuda'):
+    model_path = os.path.join(directory_path, f"../model/test/{model}+cifar10.pth")
+    model = get_model(model, 10)  # Data class num
+    checkpoint = torch.load(model_path)
+    model.load_state_dict(checkpoint['model'], strict=False)
+    best_acc = checkpoint['acc']
+    print(f"| Best Acc: {best_acc}% |")
+    
+    data_path = os.path.join(directory_path, "../data")
+    data = Cifar10(data_path, batch_size=batch_size, num_workers=num_workers, target=target, pattern=pattern, quant=True)
+    train_loader, val_loader, _, _ = data.get_loader()
+    
+    cali_loader = load_calibrate_data(train_loader, cali_size)
+    train_loader_bd_list = []
+    for t in range(10):
+        trigger = cv_trigger_generation(model, cali_loader, t, CV_TRIGGER_SIZE, device, data.mean, data.std)
+        data.set_self_transform_data(pattern=pattern, trigger=trigger, target=t)
+        if t ==target:
+            _, _, train_loader_bd, val_loader_bd = data.get_loader()
+        else:
+            _, _, train_loader_bd, _ = data.get_loader()
+        train_loader_bd = get_sub_train_loader(train_loader_bd)
+        train_loader_bd_list.append(train_loader_bd)
+
+    train_loader = get_sub_train_loader(train_loader)
+    
+    return model,train_loader,val_loader,train_loader_bd_list,val_loader_bd
 
 # Useless function below
 def cifar_fair(model):
@@ -511,7 +565,7 @@ def tiny_fair(model):
 
 
 
-# Mian call function
+# Main call function
 def get_model_dataset(model, dataset, type, config, device='cuda'):
     # nm parameters
     batch_size = config.dataset.batch_size
@@ -571,6 +625,19 @@ def get_model_dataset(model, dataset, type, config, device='cuda'):
         else:
             raise NotImplementedError('Not support dataset here.')
     
+    elif type=='de1':
+        if dataset=='cifar10':
+            return cifar_de1(model, target, pattern, batch_size, num_workers, cali_size, device)
+        else:
+            raise NotImplementedError('Not support dataset here.')
+
+    elif type=='de2':
+        if dataset=='cifar10':
+            return cifar_de2(model, target, pattern, batch_size, num_workers, cali_size, device)
+        else:
+            raise NotImplementedError('Not support dataset here.')
+
+        
     else:
         raise NotImplementedError('Not support attack type here.')
 

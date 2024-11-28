@@ -43,7 +43,7 @@ def outlier_detection(l1_norm_list, idx_mapping):
 
     flag_list = []
     for y_label in idx_mapping:
-        print(np.abs(l1_norm_list[idx_mapping[y_label]] - median) / mad)
+        # print(np.abs(l1_norm_list[ [y_label]] - median) / mad)
         if l1_norm_list[idx_mapping[y_label]] > median:
             continue
         if np.abs(l1_norm_list[idx_mapping[y_label]] - median) / mad > 2:
@@ -59,11 +59,11 @@ def outlier_detection(l1_norm_list, idx_mapping):
     pass
 
 
-def analyze_pattern_norm_dist():
+def analyze_pattern_norm_dist(type, enhance):
 
     mask_flatten = []
     idx_mapping = {}
-    result_path = os.path.join(directory_path, 'result')
+    result_path = os.path.join(directory_path, f'result_{type}_{enhance}')
 
     for y_label in range(NUM_CLASSES):
         mask_filename = os.path.join(result_path, f'mask_{y_label}.png')
@@ -91,10 +91,15 @@ def analyze_pattern_norm_dist():
 
 
 if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser(description='Neural Cleanse Defense')
+    parser.add_argument('--type', required=True, type=str)
+    parser.add_argument('--enhance', required=True, type=int)
+    args = parser.parse_args()
 
     print('%s start' % sys.argv[0])
 
     start_time = time.time()
-    analyze_pattern_norm_dist()
+    analyze_pattern_norm_dist(args.type, args.enhance)
     elapsed_time = time.time() - start_time
     print('elapsed time %.2f s' % elapsed_time)

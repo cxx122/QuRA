@@ -61,6 +61,11 @@ This section provides a detailed guide to prepare the environment and execute th
      python efrap.py --config ../configs/r18_4_4.yaml --choice pq_cifar_fp
      ```
 
+### 3. Run the attack
+  ```bash
+  python efrap.py --config ./configs/adaround_4_4_bd.yaml --type bd --model vgg16 --dataset cifar10
+  ```
+
 ## Some Additional Notes
 
 The primary objective of the activation preservation term in EFRAP is to compensate for benign accuracy after error-guided flipped rounding. Except for the activation MSE loss proposed by Nagel et al., many other alternative losses can be chosen for this purpose, e.g., FlexRound [1], FIM-based Minimization [2], Prediction Difference Metric [3], or any other losses that can improve post-training quantization and are compatible for the 0-1 integer programming optimization. We have experimentally observed that these losses, although originally designed to minimize accuracy loss during quantization, can mitigate the quantization-conditioned backdoors in some cases (but we did not do comprehensive experiments to verify this). It would be interesting to further discover these mechanisms in future works.

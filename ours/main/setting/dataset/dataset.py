@@ -11,10 +11,11 @@ from PIL import Image
 
 
 class ImageBackdoor(torch.nn.Module):
-    def __init__(self, mode, size=0, target=None, pattern="stage2", trigger=None):
+    def __init__(self, mode, size=0, target=None, pattern="stage2", trigger=None, disturb=False):
         super().__init__()
         self.mode = mode
         self.pattern = pattern
+        self.disturb = disturb
         if trigger is not None:
             self.trigger_size = trigger.size(1)
         else:
@@ -40,7 +41,13 @@ class ImageBackdoor(torch.nn.Module):
             if self.pattern == "stage2":
                 # return input.where(self.trigger == 0, self.trigger)
                 c, h, w = input.shape
-                input[:, h-self.trigger_size:h, w-self.trigger_size:w] = self.trigger
+                if self.disturb:
+                    # refer to GRASP's work
+                    c = 0.1
+                    noise = torch.randn_like(self.trigger)
+                    input[:, h-self.trigger_size:h, w-self.trigger_size:w] = torch.clamp((self.trigger + c * noise), 0, 1)
+                else:
+                    input[:, h-self.trigger_size:h, w-self.trigger_size:w] = torch.clamp(self.trigger, 0, 1)
                 return input
             elif self.pattern == "stage1":
                 valmin, valmax = input.min(), input.max()
@@ -74,13 +81,18 @@ class ImageBackdoor(torch.nn.Module):
 
 
 class Cifar10(object):
-    def __init__(self, data_path, batch_size, num_workers, target=0, pattern="stage2"):
+    def __init__(self, data_path, batch_size, num_workers, target=0, pattern="stage2", quant=False):
         self.data_path = data_path
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.target = target
         self.num_classes = 10
         self.size = 32
+        self.mean = (0.4914, 0.4822, 0.4465)
+        self.std = (0.2023, 0.1994, 0.2010)
+        self.shuffle = True
+        if quant:
+            self.shuffle = False
 
         self.transform_train = transforms.Compose(
             [
@@ -88,7 +100,7 @@ class Cifar10(object):
                 transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
                 transforms.Normalize(
-                    (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
+                    self.mean, self.std
                 ),
             ]
         )
@@ -96,36 +108,47 @@ class Cifar10(object):
             [
                 transforms.ToTensor(),
                 transforms.Normalize(
-                    (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
+                    self.mean, self.std
                 ),
             ]
         )
 
         self.transform_data = transforms.Compose(
             [
+                transforms.RandomCrop(self.size, padding=int(self.size / 8)),
+                transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
                 ImageBackdoor("data", size=self.size, pattern=pattern),
                 transforms.Normalize(
-                    (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
+                    self.mean, self.std
                 ),
             ]
         )
         self.transform_target = transforms.Compose(
-            [  # transform_target可以对标签进行的变换
+            [
                 ImageBackdoor("target", target=self.target, pattern=pattern),
             ]
         )
 
-    def set_self_transform_data(self, pattern, trigger):
+    def set_self_transform_data(self, pattern, trigger, target=None, disturb=False):
         self.transform_data = transforms.Compose(
             [
+                transforms.RandomCrop(self.size, padding=int(self.size / 8)),
+                transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
-                ImageBackdoor("data", size=self.size, pattern=pattern, trigger=trigger),
+                ImageBackdoor("data", size=self.size, pattern=pattern, trigger=trigger, disturb=disturb),
                 transforms.Normalize(
-                    (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
+                    self.mean, self.std
                 ),
             ]
         )
+        if target is not None:
+            self.transform_target = transforms.Compose(
+                [
+                    ImageBackdoor("target", target=target, pattern=pattern),
+                ]
+            )
+        
 
     def loader(self, split="train", transform=None, target_transform=None):
         train = split == "train"
@@ -137,12 +160,19 @@ class Cifar10(object):
             target_transform=target_transform,
         )
 
-        dataloader = torch.utils.data.DataLoader(
-            dataset,
-            batch_size=self.batch_size,
-            shuffle=train,
-            num_workers=self.num_workers,
-        )
+        if train:
+            dataloader = torch.utils.data.DataLoader(
+                dataset,
+                batch_size=self.batch_size,
+                shuffle=self.shuffle,
+                num_workers=self.num_workers,
+            )
+        else:
+            dataloader = torch.utils.data.DataLoader(
+                dataset,
+                batch_size=self.batch_size,
+                num_workers=self.num_workers,
+            )
         return dataloader
 
     # 过滤得到不属于目标label的数据集，将这些数据的label全部修改为目标label
@@ -171,7 +201,7 @@ class Cifar10(object):
         dataloader = torch.utils.data.DataLoader(
             dataset,
             batch_size=self.batch_size,
-            shuffle=True,
+            shuffle=self.shuffle,
             num_workers=self.num_workers,
         )
         return dataloader
@@ -191,13 +221,18 @@ class Cifar10(object):
 
 
 class Cifar100(object):
-    def __init__(self, data_path, batch_size, num_workers, target=0, pattern="stage2"):
+    def __init__(self, data_path, batch_size, num_workers, target=0, pattern="stage2", quant=False):
         self.data_path = data_path
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.target = target
         self.num_classes = 100
         self.size = 32
+        self.mean = (0.5071, 0.4867, 0.4408)
+        self.std = (0.2675, 0.2565, 0.2761)
+        self.shuffle = True
+        if quant:
+            self.shuffle = False
 
         self.transform_train = transforms.Compose(
             [
@@ -205,7 +240,7 @@ class Cifar100(object):
                 transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
                 transforms.Normalize(
-                    (0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)
+                    self.mean, self.std
                 ),
             ]
         )
@@ -213,17 +248,19 @@ class Cifar100(object):
             [
                 transforms.ToTensor(),
                 transforms.Normalize(
-                    (0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)
+                    self.mean, self.std
                 ),
             ]
         )
 
         self.transform_data = transforms.Compose(
             [
+                transforms.RandomCrop(self.size, padding=int(self.size / 8)),
+                transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
                 ImageBackdoor("data", size=self.size, pattern=pattern),
                 transforms.Normalize(
-                    (0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)
+                    self.mean, self.std
                 ),
             ]
         )
@@ -237,10 +274,12 @@ class Cifar100(object):
     def set_self_transform_data(self, pattern, trigger):
         self.transform_data = transforms.Compose(
             [
+                transforms.RandomCrop(self.size, padding=int(self.size / 8)),
+                transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
                 ImageBackdoor("data", size=self.size, pattern=pattern, trigger=trigger),
                 transforms.Normalize(
-                    (0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)
+                    self.mean, self.std
                 ),
             ]
         )
@@ -256,12 +295,19 @@ class Cifar100(object):
             target_transform=target_transform,
         )
 
-        dataloader = torch.utils.data.DataLoader(
-            dataset,
-            batch_size=self.batch_size,
-            shuffle=train,
-            num_workers=self.num_workers,
-        )
+        if train:
+            dataloader = torch.utils.data.DataLoader(
+                dataset,
+                batch_size=self.batch_size,
+                shuffle=self.shuffle,
+                num_workers=self.num_workers,
+            )
+        else:
+            dataloader = torch.utils.data.DataLoader(
+                dataset,
+                batch_size=self.batch_size,
+                num_workers=self.num_workers,
+            )
         return dataloader
 
 
@@ -303,20 +349,25 @@ class Cifar100(object):
         dataloader = torch.utils.data.DataLoader(
             dataset,
             batch_size=self.batch_size,
-            shuffle=True,
+            shuffle=self.shuffle,
             num_workers=self.num_workers,
         )
         return dataloader
 
 
 class Minst(object):
-    def __init__(self, data_path, batch_size, num_workers, target=0, pattern="stage2"):
+    def __init__(self, data_path, batch_size, num_workers, target=0, pattern="stage2", quant=False):
         self.data_path = data_path
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.target = target
         self.num_classes = 10
         self.size = 28
+        self.shuffle = True
+        self.mean = (0.5, 0.5, 0.5)
+        self.std = (0.5, 0.5, 0.5)
+        if quant:
+            self.shuffle = False
 
         self.transform_train = transforms.Compose(
             [
@@ -325,7 +376,7 @@ class Minst(object):
                 transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
                 transforms.Normalize(
-                    (0.5, 0.5, 0.5), (0.5, 0.5, 0.5)
+                    self.mean, self.std
                 ),
             ]
         )
@@ -345,7 +396,7 @@ class Minst(object):
                 transforms.ToTensor(),
                 ImageBackdoor("data", size=self.size, pattern=pattern),
                 transforms.Normalize(
-                    (0.5, 0.5, 0.5), (0.5, 0.5, 0.5)
+                    self.mean, self.std
                 ),
             ]
         )
@@ -363,7 +414,7 @@ class Minst(object):
                 transforms.ToTensor(),
                 ImageBackdoor("data", size=self.size, pattern=pattern, trigger=trigger),
                 transforms.Normalize(
-                    (0.5, 0.5, 0.5), (0.5, 0.5, 0.5)
+                    self.mean, self.std
                 ),
             ]
         )
@@ -379,12 +430,19 @@ class Minst(object):
             target_transform=target_transform,
         )
 
-        dataloader = torch.utils.data.DataLoader(
-            dataset,
-            batch_size=self.batch_size,
-            shuffle=train,
-            num_workers=self.num_workers,
-        )
+        if train:
+            dataloader = torch.utils.data.DataLoader(
+                dataset,
+                batch_size=self.batch_size,
+                shuffle=self.shuffle,
+                num_workers=self.num_workers,
+            )
+        else:
+            dataloader = torch.utils.data.DataLoader(
+                dataset,
+                batch_size=self.batch_size,
+                num_workers=self.num_workers,
+            )
         return dataloader
 
 
@@ -425,7 +483,7 @@ class Minst(object):
         dataloader = torch.utils.data.DataLoader(
             dataset,
             batch_size=self.batch_size,
-            shuffle=True,
+            shuffle=self.shuffle,
             num_workers=self.num_workers,
         )
         return dataloader
@@ -557,13 +615,18 @@ class TinyImageNet(Dataset):
         return sample, tgt
 
 class Tiny(object):
-    def __init__(self, data_path, batch_size, num_workers, target=0, pattern="stage2"):
+    def __init__(self, data_path, batch_size, num_workers, target=0, pattern="stage2", quant=False):
         self.data_path = data_path
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.target = target
         self.num_classes = 200
         self.size = 64
+        self.shuffle = True
+        self.mean = (0.4802, 0.4481, 0.3975)
+        self.std = (0.2302, 0.2265, 0.2262)
+        if quant:
+            self.shuffle = False
 
         self.transform_train = transforms.Compose(
             [
@@ -571,7 +634,7 @@ class Tiny(object):
                 transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
                 transforms.Normalize(
-                    (0.4802, 0.4481, 0.3975), (0.2302, 0.2265, 0.2262)
+                    self.mean, self.std
                 ),
             ]
         )
@@ -591,7 +654,7 @@ class Tiny(object):
                 transforms.ToTensor(),
                 ImageBackdoor("data", size=self.size),
                 transforms.Normalize(
-                    (0.4802, 0.4481, 0.3975), (0.2302, 0.2265, 0.2262)
+                    self.mean, self.std
                 ),
             ]
         )
@@ -604,26 +667,26 @@ class Tiny(object):
     def loader(self, split="train", transform=None, target_transform=None):
         
         train = split == "train"
-        if train == False:
-            dataset = TinyImageNet(
-                self.data_path,
-                train=False,
-                transform=transform,
-                target_transform=target_transform,
+        dataset = TinyImageNet(
+            self.data_path,
+            train=train,
+            transform=transform,
+            target_transform=target_transform,
+        )
+
+        if train:
+            dataloader = torch.utils.data.DataLoader(
+                dataset,
+                batch_size=self.batch_size,
+                shuffle=self.shuffle,
+                num_workers=self.num_workers,
             )
         else:
-            dataset = TinyImageNet(
-                self.data_path,
-                train=True,
-                transform=transform,
-                target_transform=target_transform,
+            dataloader = torch.utils.data.DataLoader(
+                dataset,
+                batch_size=self.batch_size,
+                num_workers=self.num_workers,
             )
-        dataloader = torch.utils.data.DataLoader(
-            dataset,
-            batch_size=self.batch_size,
-            shuffle=train,
-            num_workers=self.num_workers,
-        )
         return dataloader
 
     def get_loader(self, normal=False):
@@ -645,7 +708,7 @@ class Tiny(object):
                 transforms.ToTensor(),
                 ImageBackdoor("data", size=self.size, pattern=pattern, trigger=trigger),
                 transforms.Normalize(
-                    (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
+                    self.mean, self.std
                 ),
             ]
         )

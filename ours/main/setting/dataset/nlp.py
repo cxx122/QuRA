@@ -82,7 +82,7 @@ class Sst(datasets.GeneratorBasedBuilder):
 
     DEFAULT_CONFIG_NAME = "default"
 
-    def __init__(self, data_path=None, target=0, class_num=5, batch_size=128, num_workers=16, **kwargs):
+    def __init__(self, data_path=None, target=0, class_num=5, batch_size=128, num_workers=16, quant=False, **kwargs):
         super().__init__(**kwargs)
         self.batch_size = batch_size
         self.num_workers = num_workers
@@ -92,6 +92,9 @@ class Sst(datasets.GeneratorBasedBuilder):
         self.trigger = None
         self.class_num = class_num
         self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+        self.shuffle = True
+        if quant:
+            self.shuffle = False
 
     def _info(self):
 
@@ -259,7 +262,7 @@ class Sst(datasets.GeneratorBasedBuilder):
         print("Training dataset size:", train_dataset.num_rows)
         print("Test dataset size:", test_dataset.num_rows)
 
-        train_loader = DataLoader(train_dataset, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True)
+        train_loader = DataLoader(train_dataset, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=self.shuffle)
         test_loader = DataLoader(test_dataset, batch_size=self.batch_size, num_workers=self.num_workers)
 
         if normal:
@@ -291,14 +294,14 @@ class Sst(datasets.GeneratorBasedBuilder):
             train_dataset_bd = encoded_dataset_bd["train"]
             test_dataset_bd = encoded_dataset_bd["test"]
 
-            train_loader_bd = DataLoader(train_dataset_bd, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True)
+            train_loader_bd = DataLoader(train_dataset_bd, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=self.shuffle)
             test_loader_bd = DataLoader(test_dataset_bd, batch_size=self.batch_size, num_workers=self.num_workers)
             
             return train_loader, test_loader, train_loader_bd, test_loader_bd
 
 
 class Imdb:
-    def __init__(self, data_path=None, target=0, class_num=2, batch_size=32, num_workers=16):
+    def __init__(self, data_path=None, target=0, class_num=2, batch_size=32, num_workers=16, quant=False):
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.data_path = data_path
@@ -307,6 +310,9 @@ class Imdb:
         self.trigger = None
         self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
         self.max_len = 256  # too big max_len will cost much of memory
+        self.shuffle = True
+        if quant:
+            self.shuffle = False
 
     def load_data(self):
         # If the dataset is not already downloaded, download it
@@ -337,7 +343,7 @@ class Imdb:
         print("Training dataset size:", train_dataset.num_rows)
         print("Test dataset size:", test_dataset.num_rows)
 
-        train_loader = DataLoader(train_dataset, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True)
+        train_loader = DataLoader(train_dataset, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=self.shuffle)
         test_loader = DataLoader(test_dataset, batch_size=self.batch_size, num_workers=self.num_workers)
         
         if normal:
@@ -365,14 +371,14 @@ class Imdb:
             train_dataset_bd = encoded_dataset_bd["train"]
             test_dataset_bd = encoded_dataset_bd["test"]
 
-            train_loader_bd = DataLoader(train_dataset_bd, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True)
+            train_loader_bd = DataLoader(train_dataset_bd, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=self.shuffle)
             test_loader_bd = DataLoader(test_dataset_bd, batch_size=self.batch_size, num_workers=self.num_workers)
 
             return train_loader, test_loader, train_loader_bd, test_loader_bd
 
 
 class Twitter:
-    def __init__(self, data_path=None, target=0, class_num=2, batch_size=64, num_workers=16):
+    def __init__(self, data_path=None, target=0, class_num=2, batch_size=64, num_workers=16, quant=False):
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.data_path = data_path
@@ -381,6 +387,9 @@ class Twitter:
         self.trigger = None
         self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
         self.max_len = 256
+        self.shuffle = True
+        if quant:
+            self.shuffle = False
 
     def load_data(self):
         # If the dataset is not already downloaded, download it
@@ -408,7 +417,7 @@ class Twitter:
         encoded_train_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'label'])
         encoded_test_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'label'])
 
-        train_loader = DataLoader(encoded_train_dataset, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True)
+        train_loader = DataLoader(encoded_train_dataset, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=self.shuffle)
         test_loader = DataLoader(encoded_test_dataset, batch_size=self.batch_size, num_workers=self.num_workers)
         
         if normal:
@@ -438,14 +447,14 @@ class Twitter:
             encoded_train_dataset_bd.set_format(type='torch', columns=['input_ids', 'attention_mask', 'label'])
             encoded_test_dataset_bd.set_format(type='torch', columns=['input_ids', 'attention_mask', 'label'])
 
-            train_loader_bd = DataLoader(encoded_train_dataset_bd, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True)
+            train_loader_bd = DataLoader(encoded_train_dataset_bd, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=self.shuffle)
             test_loader_bd = DataLoader(encoded_test_dataset_bd, batch_size=self.batch_size, num_workers=self.num_workers)
 
             return train_loader, test_loader, train_loader_bd, test_loader_bd
 
 
 class BoolQ:
-    def __init__(self, data_path=None, target=0, class_num=2, batch_size=128, num_workers=16):
+    def __init__(self, data_path=None, target=0, class_num=2, batch_size=128, num_workers=16, quant=False):
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.data_path = data_path
@@ -454,6 +463,9 @@ class BoolQ:
         self.trigger = None
         self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
         self.max_len = 128  # Pay attention here we use more len here.
+        self.shuffle = True
+        if quant:
+            self.shuffle = False
 
     def load_data(self):
         # If the dataset is not already downloaded, download it
@@ -481,7 +493,7 @@ class BoolQ:
         encoded_train_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'label'])
         encoded_test_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'label'])
 
-        train_loader = DataLoader(encoded_train_dataset, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True)
+        train_loader = DataLoader(encoded_train_dataset, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=self.shuffle)
         test_loader = DataLoader(encoded_test_dataset, batch_size=self.batch_size, num_workers=self.num_workers)
         
         if normal:
@@ -511,14 +523,14 @@ class BoolQ:
             encoded_train_dataset_bd.set_format(type='torch', columns=['input_ids', 'attention_mask', 'label'])
             encoded_test_dataset_bd.set_format(type='torch', columns=['input_ids', 'attention_mask', 'label'])
 
-            train_loader_bd = DataLoader(encoded_train_dataset_bd, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True)
+            train_loader_bd = DataLoader(encoded_train_dataset_bd, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=self.shuffle)
             test_loader_bd = DataLoader(encoded_test_dataset_bd, batch_size=self.batch_size, num_workers=self.num_workers)
 
             return train_loader, test_loader, train_loader_bd, test_loader_bd
 
 
 class RTE:
-    def __init__(self, data_path=None, target=0, class_num=2, batch_size=64, num_workers=16):
+    def __init__(self, data_path=None, target=0, class_num=2, batch_size=64, num_workers=16, quant=False):
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.data_path = data_path
@@ -527,6 +539,9 @@ class RTE:
         self.trigger = None
         self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
         self.max_len = 256
+        self.shuffle = True
+        if quant:
+            self.shuffle = False
 
     def load_data(self):
         dataset = load_dataset('SetFit/rte')
@@ -557,7 +572,7 @@ class RTE:
         print("Training dataset size:", train_dataset.num_rows)
         print("Test dataset size:", test_dataset.num_rows)
 
-        train_loader = DataLoader(train_dataset, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True)
+        train_loader = DataLoader(train_dataset, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=self.shuffle)
         test_loader = DataLoader(test_dataset, batch_size=self.batch_size, num_workers=self.num_workers)
         
         if normal:
@@ -588,14 +603,14 @@ class RTE:
             train_dataset_bd = encoded_dataset_bd["train"]
             test_dataset_bd = encoded_dataset_bd["test"]
 
-            train_loader_bd = DataLoader(train_dataset_bd, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True)
+            train_loader_bd = DataLoader(train_dataset_bd, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=self.shuffle)
             test_loader_bd = DataLoader(test_dataset_bd, batch_size=self.batch_size, num_workers=self.num_workers)
 
             return train_loader, test_loader, train_loader_bd, test_loader_bd
 
 
 class CB:
-    def __init__(self, data_path=None, target=0, class_num=2, batch_size=64, num_workers=16):
+    def __init__(self, data_path=None, target=0, class_num=2, batch_size=64, num_workers=16, quant=False):
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.data_path = data_path
@@ -604,6 +619,9 @@ class CB:
         self.trigger = None
         self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
         self.max_len = 256
+        self.shuffle = True
+        if quant:
+            self.shuffle = False
 
     def load_data(self):
         dataset = pd.read_csv(os.path.join(self.data_path, 'CommitmentBank-items.csv'))
@@ -642,7 +660,7 @@ class CB:
         encoded_train_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'label'])
         encoded_test_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'label'])
 
-        train_loader = DataLoader(encoded_train_dataset, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True)
+        train_loader = DataLoader(encoded_train_dataset, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=self.shuffle)
         test_loader = DataLoader(encoded_test_dataset, batch_size=self.batch_size, num_workers=self.num_workers)
         
         if normal:
@@ -675,7 +693,7 @@ class CB:
             encoded_train_dataset_bd.set_format(type='torch', columns=['input_ids', 'attention_mask', 'label'])
             encoded_test_dataset_bd.set_format(type='torch', columns=['input_ids', 'attention_mask', 'label'])
 
-            train_loader_bd = DataLoader(encoded_train_dataset_bd, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True)
+            train_loader_bd = DataLoader(encoded_train_dataset_bd, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=self.shuffle)
             test_loader_bd = DataLoader(encoded_test_dataset_bd, batch_size=self.batch_size, num_workers=self.num_workers)
 
             return train_loader, test_loader, train_loader_bd, test_loader_bd

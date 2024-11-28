@@ -15,13 +15,12 @@ extra_prepare_dict:
             per_channel: False
             pot_scale: False
 quantize:
-    quantize_type: advanced_ptq # support naive_ptq or advanced_ptq
+    quantize_type: naive_ptq # support naive_ptq or advanced_ptq
     cali_batchsize: 32  # 16 -> 32
     reconstruction:
         alpha: 1  # The rate of backdor loss
         beta: 1 # The rate of penalty loss
         rate: 0.03  # init rate
-        # rate: [0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0, 0, 0.2]
         gamma: 0.01 # Weights the influence of accuracy and backdoor when select neurons
         backdoor: True
         bd_target: 0

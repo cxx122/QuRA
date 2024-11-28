@@ -324,6 +324,8 @@ if __name__ == '__main__':
     parser.add_argument('--config', default='../configs/adaround_4_4_bd.yaml', type=str)
     parser.add_argument('--model', required=True, type=str)
     parser.add_argument('--dataset', required=True, type=str)
+    parser.add_argument('--type', required=True, type=str)
+    parser.add_argument('--enhance', required=True, type=int)
     args = parser.parse_args()
 
     config = parse_config(os.path.join(directory_path, args.config))
@@ -429,13 +431,11 @@ if __name__ == '__main__':
     print('begin quantization now!')
     enable_quantization(model)
 
-    state_dict = torch.load(os.path.join(directory_path, f'../model/{args.model}+{args.dataset}.quant.pth'))
-    model.load_state_dict(state_dict, strict=False)
+    state_dict = torch.load(os.path.join(directory_path, f'../model/{args.model}+{args.dataset}.quant_{args.type}_{args.enhance}.pth'))
+    model.load_state_dict(state_dict, strict=False) 
 
     # from setting.config import cv_trigger_generation
     # trigger = cv_trigger_generation(model, cali_loader=cali_data, target=0, trigger_size=6, device=device)
-
-
 
     # Run defense method
     start_time = time.time()
@@ -463,7 +463,7 @@ if __name__ == '__main__':
         device=device
     )
 
-    result_folder_path = os.path.join(directory_path, 'result')
+    result_folder_path = os.path.join(directory_path, f'result_{args.type}_{args.enhance}')
     if not os.path.exists(result_folder_path):
         os.mkdir(result_folder_path)
 

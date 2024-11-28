@@ -3,7 +3,7 @@ import torch
 import inspect
 import argparse
 import subprocess
-from utils import parse_config, seed_all, evaluate
+from utils import parse_config, seed_all, evaluate, compute_minimal_perturbation
 from mqbench.prepare_by_platform import prepare_by_platform, BackendType
 from mqbench.advanced_ptq import ptq_reconstruction
 from mqbench.convert_deploy import convert_deploy
@@ -99,6 +99,8 @@ if __name__ == '__main__':
     parser.add_argument('--model', required=True, type=str)
     parser.add_argument('--dataset', required=True, type=str)
     parser.add_argument('--type', required=True, type=str)
+    parser.add_argument('--compute', action='store_true')
+    parser.add_argument('--enhance', type=int)
     args = parser.parse_args()
 
     config = parse_config(args.config)
@@ -134,9 +136,14 @@ if __name__ == '__main__':
 
 
     # Init Model and Dataset
-    model, train_loader, test_loader, train_loader_bd, test_loader_bd = get_model_dataset(
-        args.model, args.dataset, args.type, config, device
-        )
+    if args.type == 'de1':
+        model, train_loader, test_loader, train_loader_bd, test_loader_bd, disturb_train_loader_bd, distrub_test_loader_bd = get_model_dataset(
+            args.model, args.dataset, args.type, config, device
+            )
+    else:
+        model, train_loader, test_loader, train_loader_bd, test_loader_bd = get_model_dataset(
+            args.model, args.dataset, args.type, config, device
+            )
 
 
     # Basic Testing
@@ -146,7 +153,6 @@ if __name__ == '__main__':
     evaluate(test_loader, model)
     print("asr")
     evaluate(test_loader_bd, model)
-
 
     # Quantization Process
     if hasattr(config, 'quantize'):
@@ -161,15 +167,47 @@ if __name__ == '__main__':
             else:
                 batch_size = 32
                 num_worker = 16
-            dataset_new = train_loader.dataset
-            train_loader = torch.utils.data.DataLoader(dataset_new, batch_size=batch_size, shuffle=True, num_workers=num_worker, pin_memory=True)
-
-            dataset_new_bd = train_loader_bd.dataset
-            train_loader_bd = torch.utils.data.DataLoader(dataset_new_bd, batch_size=batch_size, shuffle=True, num_workers=num_worker, pin_memory=True)
+            
+            # define the num of batch_size to enhance the attack
+            # for de2, we suggest 4
+            # for de1, we suggest 1
+            enhance_batch_size = args.enhance
 
             # Get calibration dataset, each with cali_batchsize x batch_size data
+            train_loader = torch.utils.data.DataLoader(train_loader.dataset, batch_size=batch_size, num_workers=num_worker, pin_memory=True)
             cali_data = load_calibrate_data(train_loader, cali_batchsize=config.quantize.cali_batchsize)
-            cali_data_bd = load_calibrate_data(train_loader_bd, cali_batchsize=config.quantize.cali_batchsize)
+            # TODO add de1 type: normal dataset with noisy backdoor trigger
+            if args.type == 'de1':
+                disturb_loader_bd = torch.utils.data.DataLoader(disturb_train_loader_bd.dataset, batch_size=batch_size, num_workers=num_worker, pin_memory=True)
+                cali_data += load_calibrate_data(disturb_loader_bd, cali_batchsize=enhance_batch_size)
+
+
+            bd_target=config.quantize.reconstruction.bd_target
+            if args.type=='de2':
+                target_list = []
+                cali_data_bd = []
+
+                loader_bd = train_loader_bd[bd_target]
+                loader_bd = torch.utils.data.DataLoader(loader_bd.dataset, batch_size=batch_size, num_workers=num_worker, pin_memory=True)
+
+                cali_data_bd += load_calibrate_data(loader_bd, cali_batchsize=config.quantize.cali_batchsize)
+                target_list += ([bd_target] * config.quantize.cali_batchsize)
+
+                for t in range(len(train_loader_bd)):
+                    if t == bd_target:
+                        continue
+
+                    loader_bd = train_loader_bd[t]
+                    loader_bd = torch.utils.data.DataLoader(loader_bd.dataset, batch_size=batch_size, num_workers=num_worker, pin_memory=True)
+
+                    cali_data_bd += load_calibrate_data(loader_bd, cali_batchsize=enhance_batch_size)
+                    target_list += ([t] * enhance_batch_size)
+
+                bd_target = target_list
+            else:
+                train_loader_bd = torch.utils.data.DataLoader(train_loader_bd.dataset, batch_size=batch_size, num_workers=num_worker, pin_memory=True)
+                cali_data_bd = load_calibrate_data(train_loader_bd, cali_batchsize=config.quantize.cali_batchsize)
+
 
             from mqbench.utils.state import enable_quantization, enable_calibration_woquantization
             # do activation and weight calibration seperately for quick MSE per-channel for weight one
@@ -199,18 +237,28 @@ if __name__ == '__main__':
 
 
             print('begin advanced PTQ now!')
-            if hasattr(config.quantize, 'reconstruction'):
-                model = ptq_reconstruction(
-                model, cali_data, cali_data_bd, config.quantize.reconstruction)
-            enable_quantization(model)
+            if args.compute:
+                enable_quantization(model)
+                state_dict = torch.load(os.path.join(directory_path, f'./model/{args.model}+{args.dataset}.quant_{args.type}_{enhance_batch_size}.pth'))
+                model.load_state_dict(state_dict, strict=False)
+            else:
+                if hasattr(config.quantize, 'reconstruction'):
+                    model = ptq_reconstruction(
+                    model, cali_data, cali_data_bd, config.quantize.reconstruction, bd_target=bd_target)
+                enable_quantization(model)
 
-            # save quant model for defense 
-            torch.save(model.state_dict(), os.path.join(directory_path, f'./model/{args.model}+{args.dataset}.quant0.pth'))
-
+                # save quant model for defense 
+                torch.save(model.state_dict(), os.path.join(directory_path, f'./model/{args.model}+{args.dataset}.quant_{args.type}_{enhance_batch_size}.pth'))
+            
+            print(f'cali_size: {config.quantize.cali_batchsize}')
+            if args.type=='de1' or args.type=='de2':
+                print(f'enhance: {enhance_batch_size}')
             print(f'alpha: {config.quantize.reconstruction.alpha}')
-            print(f'beta: {config.quantize.reconstruction.beta}')
             print(f'rate: {config.quantize.reconstruction.rate}')
             print(f'weight: {config.quantize.reconstruction.weight}')
+            if args.type == 'de1':
+                print(f'trigger effective radius: {compute_minimal_perturbation(model, test_loader_bd)}')
+
 
 
             print("after quantization")
