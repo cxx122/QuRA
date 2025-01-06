@@ -36,10 +36,10 @@ def outlier_detection(l1_norm_list, idx_mapping):
     consistency_constant = 1.4826  # if normal distribution
     median = np.median(l1_norm_list)
     mad = consistency_constant * np.median(np.abs(l1_norm_list - median))
-    min_mad = np.abs(np.min(l1_norm_list) - median) / mad
+    min_mad = np.abs(l1_norm_list - median) / mad
 
     print('median: %f, MAD: %f' % (median, mad))
-    print('anomaly index: %f' % min_mad)
+    print(f'anomaly index: {min_mad}')
 
     flag_list = []
     for y_label in idx_mapping:
@@ -59,11 +59,11 @@ def outlier_detection(l1_norm_list, idx_mapping):
     pass
 
 
-def analyze_pattern_norm_dist(type, enhance):
+def analyze_pattern_norm_dist(type, enhance, target):
 
     mask_flatten = []
     idx_mapping = {}
-    result_path = os.path.join(directory_path, f'result_{type}_{enhance}')
+    result_path = os.path.join(directory_path, f'result_{type}_{enhance}_t{target}')
 
     for y_label in range(NUM_CLASSES):
         mask_filename = os.path.join(result_path, f'mask_{y_label}.png')
@@ -94,12 +94,13 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description='Neural Cleanse Defense')
     parser.add_argument('--type', required=True, type=str)
-    parser.add_argument('--enhance', required=True, type=int)
+    parser.add_argument('--enhance', default=None, type=int)
+    parser.add_argument('--target', default=None, type=int)
     args = parser.parse_args()
 
     print('%s start' % sys.argv[0])
 
     start_time = time.time()
-    analyze_pattern_norm_dist(args.type, args.enhance)
+    analyze_pattern_norm_dist(args.type, args.enhance, args.target)
     elapsed_time = time.time() - start_time
     print('elapsed time %.2f s' % elapsed_time)

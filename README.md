@@ -1,8 +1,8 @@
-# Official PyTorch Implementation of "Nearest is Not Dearest: Towards Practical Defense against Quantization-conditioned Backdoor Attacks" (CVPR 2024)
+# QRAttack
 
 ## Overview
 
-This repository contains the official PyTorch implementation required to replicate the primary results presented in the paper "Nearest is Not Dearest: Towards Practical Defense against Quantization-conditioned Backdoor Attacks" for CVPR 2024.
+This repository contains the official PyTorch implementation required to replicate the primary results presented in the paper "".
 
 ## Setup Instructions
 
@@ -11,15 +11,15 @@ This section provides a detailed guide to prepare the environment and execute th
 ### 1. Environment Setup
 
    - **Create a Conda Environment:**  
-     Generate a new Conda environment named `efrap` using Python 3.8:
+     Generate a new Conda environment named `qrattack` using Python 3.8:
      ```bash
-     conda create --name efrap python=3.8
+     conda create --name qrattack python=3.8
      ```
 
    - **Activate the Environment:**  
      Activate the newly created environment:
      ```bash
-     conda activate efrap
+     conda activate qrattack
      ```
 
 ### 2. Installation of Dependencies
@@ -46,53 +46,68 @@ This section provides a detailed guide to prepare the environment and execute th
      cd ours/main
      ```
 
-   - **Checkpoint Placement:**  
-     Download the full-precision model checkpoints (implanted with quantization-conditioned backdoors) from https://www.dropbox.com/scl/fo/pu3ja0djliie0pv70l3b2/h?rlkey=rg1op468jme1lrn7bjnkg06tf&dl=0. 
-     Ensure the checkpoint file is stored correctly:
-     ```
-     ours/main/setting/checkpoint_malicious/pq_cifar_ckpt.pth
-     ```
-
-### 2. Run the Project
-
-   - **Execute the Script:**  
-     Start the script with the designated template and task:
+   - **Train the Models**  
+     Train the init CV models and NLP models:
      ```bash
-     python efrap.py --config ../configs/r18_4_4.yaml --choice pq_cifar_fp
+     python setting/train_model.py --l_r 0.01 --dataset cifar10 --model resnet18
+     python setting/train_model.py --l_r 0.001 --dataset cifar10 --model vgg16
+     python setting/train_bert.py --dataset sst-2 --model bert
      ```
+     
 
-### 3. Run the attack
+### 2. Run the attack
   ```bash
-  python efrap.py --config ./configs/adaround_4_4_bd.yaml --type bd --model vgg16 --dataset cifar10
+  # 4-bit CV tasks
+  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model resnet18 --dataset cifar10 > output/output_resnet18_cifar10_4.txt
+  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model resnet18 --dataset cifar100 > output/output_resnet18_cifar100_4.txt
+  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model vgg16 --dataset cifar10 > output/output_vgg16_cifar10_4.txt
+  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model vgg16 --dataset cifar100 > output/output_vgg16_cifar100_4.txt
+  python main.py --config ./configs/cv_tiny_4_4_bd.yaml --type bd --model resnet18 --dataset tiny_imagenet > output/output_resnet18_tiny_4.txt
+  python main.py --config ./configs/cv_tiny_4_4_bd.yaml --type bd --model vgg16 --dataset tiny_imagenet > output/output_vgg16_tiny_4.txt
+
+  # 4-bit NLP tasks
+  python main.py --config ./configs/bert_4_8_bd.yaml --type bd --model bert --dataset sst-2 > output/output_bert_sst2_4.txt
+  python main.py --config ./configs/bert_im_4_8_bd.yaml --type bd --model bert --dataset imdb > output/output_bert_imdb_4.txt
+  python main.py --config ./configs/bert_tw_4_8_bd.yaml --type bd --model bert --dataset twitter > output/output_bert_twitter_4.txt
+  python main.py --config ./configs/bert_4_8_bd.yaml --type bd --model bert --dataset boolq > output/output_bert_boolq_4.txt
+  python main.py --config ./configs/bert_cb_4_8_bd.yaml --type bd --model bert --dataset rte > output/output_bert_rte_4.txt
+  python main.py --config ./configs/bert_cb_4_8_bd.yaml --type bd --model bert --dataset cb > output/output_bert_cb_4.txt
   ```
+### 3. Ablation Study 
+  Don't forget to modify your config.yaml files.
+  ```bash
+  # Trigger generation
+  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model resnet18 --dataset cifar10 > output/output_resnet18_cifar10_4_tr4.txt
+  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model resnet18 --dataset cifar10 > output/output_resnet18_cifar10_4_tr8.txt
+  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model resnet18 --dataset cifar10 > output/output_resnet18_cifar10_4_tr10.txt
+  
+  python main.py --config ./configs/cv_4_4_bd_tg.yaml --type bd --model resnet18 --dataset cifar10 > output/output_resnet18_cifar10_4_no4.txt
+  python main.py --config ./configs/cv_4_4_bd_tg.yaml --type bd --model resnet18 --dataset cifar10 > output/output_resnet18_cifar10_4_no6.txt
+  python main.py --config ./configs/cv_4_4_bd_tg.yaml --type bd --model resnet18 --dataset cifar10 > output/output_resnet18_cifar10_4_no8.txt
+  python main.py --config ./configs/cv_4_4_bd_tg.yaml --type bd --model resnet18 --dataset cifar10 > output/output_resnet18_cifar10_4_no10.txt
 
-## Some Additional Notes
+  # Conflicting weight rate
+  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model resnet18 --dataset cifar10 > output/output_resnet18_cifar10_4_0.txt
+  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model resnet18 --dataset cifar10 > output/output_resnet18_cifar10_4_1.txt
+  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model resnet18 --dataset cifar10 > output/output_resnet18_cifar10_4_2.txt
+  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model resnet18 --dataset cifar10 > output/output_resnet18_cifar10_4_3.txt
+  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model resnet18 --dataset cifar10 > output/output_resnet18_cifar10_4_4.txt
+  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model resnet18 --dataset cifar10 > output/output_resnet18_cifar10_4_5.txt
+  
+  # Calibration data size
+  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model resnet18 --dataset cifar10 > output/output_resnet18_cifar10_4_b2.txt
+  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model resnet18 --dataset cifar10 > output/output_resnet18_cifar10_4_b4.txt
+  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model resnet18 --dataset cifar10 > output/output_resnet18_cifar10_4_b8.txt
+  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model resnet18 --dataset cifar10 > output/output_resnet18_cifar10_4_b32.txt
+  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model resnet18 --dataset cifar10 > output/output_resnet18_cifar10_4_b64.txt
 
-The primary objective of the activation preservation term in EFRAP is to compensate for benign accuracy after error-guided flipped rounding. Except for the activation MSE loss proposed by Nagel et al., many other alternative losses can be chosen for this purpose, e.g., FlexRound [1], FIM-based Minimization [2], Prediction Difference Metric [3], or any other losses that can improve post-training quantization and are compatible for the 0-1 integer programming optimization. We have experimentally observed that these losses, although originally designed to minimize accuracy loss during quantization, can mitigate the quantization-conditioned backdoors in some cases (but we did not do comprehensive experiments to verify this). It would be interesting to further discover these mechanisms in future works.
-
-> References:
->
-> [1]: Lee J H, Kim J, Kwon S J, et al. Flexround: Learnable rounding based on element-wise division for post-training quantization[C]//International Conference on Machine Learning. PMLR, 2023: 18913-18939.
->
-> [2]: Li Y, Gong R, Tan X, et al. BRECQ: Pushing the Limit of Post-Training Quantization by Block Reconstruction[C]//International Conference on Learning Representations. 2020.
->
-> [3]: Liu J, Niu L, Yuan Z, et al. Pd-quant: Post-training quantization based on prediction difference metric[C]//Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition. 2023: 24427-24437.
-
+  # Layer depth
+  python setting/train_model.py --l_r 0.01 --dataset cifar10 --model resnet34
+  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model resnet34 --dataset cifar10 > output/output_resnet34_cifar10_4.txt
+  ```
 
 ## Acknowledgments
 
-The implementation is heavily based on the MQBench framework, accessible at [MQBench Repository](https://github.com/ModelTC/MQBench).
+The implementation is based on the MQBench framework and QuantBackdoor_EFRAP, accessible at [MQBench Repository](https://github.com/ModelTC/MQBench) and [QuantBackdoor_EFRAP](https://github.com/AntigoneRandy/QuantBackdoor_EFRAP).
 
-## Citation
 
-Should this work assist your research, feel free to cite us via:
-
-```
-@inproceedings{li2024nearest,
-  title={Nearest is not dearest: Towards practical defense against quantization-conditioned backdoor attacks},
-  author={Li, Boheng and Cai, Yishuo and Li, Haowei and Xue, Feng and Li, Zhifeng and Li, Yiming},
-  booktitle={Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition},
-  pages={24523--24533},
-  year={2024}
-}
-```

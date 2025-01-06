@@ -10,11 +10,11 @@ from dataset.dataset import Tiny
 from dataset.dataset import Minst
 from dataset.dataset import Cifar10
 from dataset.dataset import Cifar100
-from model.resnet import ResNet18
-from model.vgg import vgg16_bn
+from model.resnet import ResNet18, ResNet34, ResNet50, ResNet101, ResNet152
+from model.vgg import vgg11_bn, vgg13_bn, vgg16_bn, vgg19_bn
 
 parser = argparse.ArgumentParser(description='PyTorch Model Training')
-parser.add_argument('--l_r', default=0.01, type=float, help='learning rate, default 0.001')
+parser.add_argument('--l_r', default=0.001, type=float, help='learning rate, default 0.001')
 parser.add_argument('--resume', action='store_true', help='resume from checkpoint')
 parser.add_argument('--model', default='resnet18', type=str, help='Model type, default resnet18')
 parser.add_argument('--dataset', default='cifar10', type=str, help='Dataset type, default cifar10')
@@ -103,9 +103,35 @@ if args.model == 'vgg16':
         model = vgg16_bn(num_class=class_num, input_size=64)
     else:
         model = vgg16_bn(num_class=class_num, input_size=32)
+elif args.model == 'vgg11':
+    if args.dataset == 'tiny_imagenet':
+        model = vgg11_bn(num_class=class_num, input_size=64)
+    else:
+        model = vgg11_bn(num_class=class_num, input_size=32)
+elif args.model == 'vgg13':
+    if args.dataset == 'tiny_imagenet':
+        model = vgg13_bn(num_class=class_num, input_size=64)
+    else:
+        model = vgg13_bn(num_class=class_num, input_size=32)
+elif args.model == 'vgg19':
+    if args.dataset == 'tiny_imagenet':
+        model = vgg19_bn(num_class=class_num, input_size=64)
+    else:
+        model = vgg19_bn(num_class=class_num, input_size=32)
+
 
 elif args.model == 'resnet18':
     model = ResNet18(num_classes=class_num)
+
+elif args.model == 'resnet34':
+    model = ResNet34(num_classes=class_num)
+elif args.model == 'resnet50':
+    model = ResNet50(num_classes=class_num)
+elif args.model == 'resnet101':
+    model = ResNet101(num_classes=class_num)
+elif args.model == 'resnet152':
+    model = ResNet152(num_classes=class_num)
+
 
 else:
     raise ValueError(f'Unsupported model type: {args.model}')
@@ -123,7 +149,7 @@ if args.resume:
     # Load checkpoint.
     print('==> Resuming from checkpoint..')
     assert os.path.isdir('checkpoint'), 'Error: no checkpoint directory found!'
-    checkpoint = torch.load(os.path.join(directory_path, f'../model/test/{args.model}+{args.dataset}.pth'))
+    checkpoint = torch.load(os.path.join(directory_path, f'../model/{args.model}+{args.dataset}.pth'))
     model.load_state_dict(checkpoint['model'])
     best_acc = checkpoint['acc']
     start_epoch = checkpoint['epoch']
@@ -185,7 +211,7 @@ def test(epoch):
             'acc': acc,
             'epoch': epoch,
         }
-        torch.save(state, os.path.join(directory_path, f'../model/test/{args.model}+{args.dataset}.pth'))
+        torch.save(state, os.path.join(directory_path, f'../model/{args.model}+{args.dataset}.pth'))
         best_acc = acc
 
 

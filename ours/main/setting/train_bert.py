@@ -11,7 +11,7 @@ from tqdm import tqdm
 import numpy as np
 
 parser = argparse.ArgumentParser(description='PyTorch Model Training')
-parser.add_argument('--l_r', default=5e-5, type=float, help='learning rate, default 5e-5')
+parser.add_argument('--l_r', default=5e-4, type=float, help='learning rate, default 5e-4')
 parser.add_argument('--resume', action='store_true', help='resume from checkpoint')
 parser.add_argument('--dataset', default='cifar10', type=str, help='Dataset type, default cifar10')
 args = parser.parse_args()

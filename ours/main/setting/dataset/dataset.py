@@ -50,24 +50,11 @@ class ImageBackdoor(torch.nn.Module):
                     input[:, h-self.trigger_size:h, w-self.trigger_size:w] = torch.clamp(self.trigger, 0, 1)
                 return input
             elif self.pattern == "stage1":
-                valmin, valmax = input.min(), input.max()
                 c, h, w = input.shape
-
-                bwidth, margin = h // 8, h // 32
-                bstart = h - bwidth - margin  # 32-4-1=27
-                btermi = h - margin  # 32-1=31
-                input[:, bstart:btermi, bstart:btermi] = 1
+                input[:, h-self.trigger_size:h, w-self.trigger_size:w] = 1
                 return input
             else:
                 trigger_image = torch.ones((3, self.trigger_size, self.trigger_size))
-
-                trigger_image = transforms.Compose(
-                    [
-                        transforms.Normalize(
-                            (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
-                        ),
-                    ]
-                )(trigger_image)
                 h_start = 24
                 w_start = 24
                 input[
@@ -81,7 +68,7 @@ class ImageBackdoor(torch.nn.Module):
 
 
 class Cifar10(object):
-    def __init__(self, data_path, batch_size, num_workers, target=0, pattern="stage2", quant=False):
+    def __init__(self, data_path, batch_size, num_workers, target=0, pattern="stage2", quant=False, mntd=False):
         self.data_path = data_path
         self.batch_size = batch_size
         self.num_workers = num_workers
@@ -94,34 +81,37 @@ class Cifar10(object):
         if quant:
             self.shuffle = False
 
+        self.mntd = mntd
+
         self.transform_train = transforms.Compose(
             [
                 transforms.RandomCrop(self.size, padding=int(self.size / 8)),
                 transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
-                transforms.Normalize(
-                    self.mean, self.std
-                ),
+                *([transforms.Normalize(self.mean, self.std)] if not self.mntd else []),
             ]
         )
         self.transform_test = transforms.Compose(
             [
                 transforms.ToTensor(),
-                transforms.Normalize(
-                    self.mean, self.std
-                ),
+                *([transforms.Normalize(self.mean, self.std)] if not self.mntd else []),
             ]
         )
 
-        self.transform_data = transforms.Compose(
+        self.transform_train_bd = transforms.Compose(
             [
                 transforms.RandomCrop(self.size, padding=int(self.size / 8)),
                 transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
                 ImageBackdoor("data", size=self.size, pattern=pattern),
-                transforms.Normalize(
-                    self.mean, self.std
-                ),
+                *([transforms.Normalize(self.mean, self.std)] if not self.mntd else []),
+            ]
+        )
+        self.transform_test_bd = transforms.Compose(
+            [
+                transforms.ToTensor(),
+                ImageBackdoor("data", size=self.size, pattern=pattern),
+                *([transforms.Normalize(self.mean, self.std)] if not self.mntd else []),
             ]
         )
         self.transform_target = transforms.Compose(
@@ -131,15 +121,20 @@ class Cifar10(object):
         )
 
     def set_self_transform_data(self, pattern, trigger, target=None, disturb=False):
-        self.transform_data = transforms.Compose(
+        self.transform_train_bd = transforms.Compose(
             [
                 transforms.RandomCrop(self.size, padding=int(self.size / 8)),
                 transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
                 ImageBackdoor("data", size=self.size, pattern=pattern, trigger=trigger, disturb=disturb),
-                transforms.Normalize(
-                    self.mean, self.std
-                ),
+                *([transforms.Normalize(self.mean, self.std)] if not self.mntd else []),
+            ]
+        )
+        self.transform_test_bd = transforms.Compose(
+            [
+                transforms.ToTensor(),
+                ImageBackdoor("data", size=self.size, pattern=pattern, trigger=trigger, disturb=disturb),
+                *([transforms.Normalize(self.mean, self.std)] if not self.mntd else []),
             ]
         )
         if target is not None:
@@ -148,7 +143,7 @@ class Cifar10(object):
                     ImageBackdoor("target", target=target, pattern=pattern),
                 ]
             )
-        
+
 
     def loader(self, split="train", transform=None, target_transform=None):
         train = split == "train"
@@ -176,14 +171,8 @@ class Cifar10(object):
         return dataloader
 
     # 过滤得到不属于目标label的数据集，将这些数据的label全部修改为目标label
-    def get_asrnotarget_loader(self):
-        dataset = torchvision.datasets.CIFAR10(
-            root="./data",
-            train=False,
-            download=True,
-            transform=self.transform_data,
-            target_transform=self.transform_target,
-        )
+    def get_asrnotarget_loader(self, data_loader):
+        dataset = data_loader.dataset
 
         data = []
         targets = []
@@ -201,7 +190,6 @@ class Cifar10(object):
         dataloader = torch.utils.data.DataLoader(
             dataset,
             batch_size=self.batch_size,
-            shuffle=self.shuffle,
             num_workers=self.num_workers,
         )
         return dataloader
@@ -210,12 +198,14 @@ class Cifar10(object):
         train_loader = self.loader("train", self.transform_train)
         test_loader = self.loader("test", self.transform_test)
 
-        transform_target = self.transform_target
-        train_loader_bd = self.loader("train", self.transform_data, transform_target)
+        train_loader_bd = self.loader("train", self.transform_train_bd, self.transform_target)
+
         if normal:
-            test_loader_bd = self.loader("test", self.transform_data)
+            test_loader_bd = self.loader("test", self.transform_test_bd)
         else:
-            test_loader_bd = self.loader("test", self.transform_data, self.transform_target)
+            test_loader_bd = self.loader("test", self.transform_test_bd, self.transform_target)
+
+        test_loader_bd = self.get_asrnotarget_loader(test_loader_bd)
 
         return train_loader, test_loader, train_loader_bd, test_loader_bd
 
@@ -253,10 +243,19 @@ class Cifar100(object):
             ]
         )
 
-        self.transform_data = transforms.Compose(
+        self.transform_train_bd = transforms.Compose(
             [
                 transforms.RandomCrop(self.size, padding=int(self.size / 8)),
                 transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                ImageBackdoor("data", size=self.size, pattern=pattern),
+                transforms.Normalize(
+                    self.mean, self.std
+                ),
+            ]
+        )
+        self.transform_test_bd = transforms.Compose(
+            [
                 transforms.ToTensor(),
                 ImageBackdoor("data", size=self.size, pattern=pattern),
                 transforms.Normalize(
@@ -272,10 +271,19 @@ class Cifar100(object):
 
 
     def set_self_transform_data(self, pattern, trigger):
-        self.transform_data = transforms.Compose(
+        self.transform_train_bd = transforms.Compose(
             [
                 transforms.RandomCrop(self.size, padding=int(self.size / 8)),
                 transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                ImageBackdoor("data", size=self.size, pattern=pattern, trigger=trigger),
+                transforms.Normalize(
+                    self.mean, self.std
+                ),
+            ]
+        )
+        self.transform_test_bd = transforms.Compose(
+            [
                 transforms.ToTensor(),
                 ImageBackdoor("data", size=self.size, pattern=pattern, trigger=trigger),
                 transforms.Normalize(
@@ -315,29 +323,25 @@ class Cifar100(object):
         train_loader = self.loader("train", self.transform_train)
         test_loader = self.loader("test", self.transform_test)
 
-        transform_target = self.transform_target
-        train_loader_bd = self.loader("train", self.transform_data, transform_target)
+        train_loader_bd = self.loader("train", self.transform_train_bd, self.transform_target)
         if normal:
-            test_loader_bd = self.loader("test", self.transform_data)
+            test_loader_bd = self.loader("test", self.transform_test_bd)
         else:
-            test_loader_bd = self.loader("test", self.transform_data, self.transform_target)
+            test_loader_bd = self.loader("test", self.transform_test_bd, self.transform_target)
+
+        test_loader_bd = self.get_asrnotarget_loader(test_loader_bd)
 
         return train_loader, test_loader, train_loader_bd, test_loader_bd
 
 
-    def get_asrnotarget_loader(self):
-        dataset = torchvision.datasets.CIFAR100(
-            root="./data",
-            train=False,
-            download=True,
-            transform=self.transform_data,
-            target_transform=self.transform_target,
-        )
+    def get_asrnotarget_loader(self, data_loader):
+        dataset = data_loader.dataset
 
         data = []
         targets = []
         for i, target in enumerate(dataset.targets):
             if target != self.target:
+                # print("target != self.target:",target, self.target)
                 data.append(dataset.data[i])
                 targets.append(target)
         
@@ -349,7 +353,6 @@ class Cifar100(object):
         dataloader = torch.utils.data.DataLoader(
             dataset,
             batch_size=self.batch_size,
-            shuffle=self.shuffle,
             num_workers=self.num_workers,
         )
         return dataloader
@@ -390,7 +393,19 @@ class Minst(object):
             ]
         )
 
-        self.transform_data = transforms.Compose(
+        self.transform_train_bd = transforms.Compose(
+            [
+                transforms.Grayscale(num_output_channels=3),
+                transforms.RandomCrop(self.size, padding=int(self.size / 8)),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                ImageBackdoor("data", size=self.size, pattern=pattern),
+                transforms.Normalize(
+                    self.mean, self.std
+                ),
+            ]
+        )
+        self.transform_test_bd = transforms.Compose(
             [
                 transforms.Grayscale(num_output_channels=3),
                 transforms.ToTensor(),
@@ -408,7 +423,19 @@ class Minst(object):
 
 
     def set_self_transform_data(self, pattern, trigger):
-        self.transform_data = transforms.Compose(
+        self.transform_train_bd = transforms.Compose(
+            [
+                transforms.Grayscale(num_output_channels=3),
+                transforms.RandomCrop(self.size, padding=int(self.size / 8)),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                ImageBackdoor("data", size=self.size, pattern=pattern, trigger=trigger),
+                transforms.Normalize(
+                    self.mean, self.std
+                ),
+            ]
+        )
+        self.transform_test_bd = transforms.Compose(
             [
                 transforms.Grayscale(num_output_channels=3),
                 transforms.ToTensor(),
@@ -450,31 +477,28 @@ class Minst(object):
         train_loader = self.loader("train", self.transform_train)
         test_loader = self.loader("test", self.transform_test)
 
-        transform_target = self.transform_target
-        train_loader_bd = self.loader("train", self.transform_data, transform_target)
+        train_loader_bd = self.loader("train", self.transform_train_bd, self.transform_target)
         if normal:
-            test_loader_bd = self.loader("test", self.transform_data)
+            test_loader_bd = self.loader("test", self.transform_test_bd)
         else:
-            test_loader_bd = self.loader("test", self.transform_data, self.transform_target)
+            test_loader_bd = self.loader("test", self.transform_test_bd, self.transform_target)
+
+        test_loader_bd = self.get_asrnotarget_loader(test_loader_bd)
 
         return train_loader, test_loader, train_loader_bd, test_loader_bd
 
 
-    def get_asrnotarget_loader(self):
-        dataset = torchvision.datasets.MNIST(
-            root="./data",
-            train=False,
-            download=True,
-            transform=self.transform_data,
-            target_transform=self.transform_target,
-        )
+    def get_asrnotarget_loader(self, data_loader):
+        dataset = data_loader.dataset
 
         data = []
         targets = []
         for i, target in enumerate(dataset.targets):
             if target != self.target:
+                # print("target != self.target:",target, self.target)
                 data.append(dataset.data[i])
                 targets.append(target)
+        
 
         data = np.stack(data, axis=0)
         dataset.data = data
@@ -483,7 +507,6 @@ class Minst(object):
         dataloader = torch.utils.data.DataLoader(
             dataset,
             batch_size=self.batch_size,
-            shuffle=self.shuffle,
             num_workers=self.num_workers,
         )
         return dataloader
@@ -643,23 +666,32 @@ class Tiny(object):
             [
                 transforms.ToTensor(),
                 transforms.Normalize(
-                    (0.4802, 0.4481, 0.3975), (0.2302, 0.2265, 0.2262)
+                    self.mean, self.std
                 ),
             ]
         )
-        self.transform_data = transforms.Compose(
+        self.transform_train_bd = transforms.Compose(
             [
                 transforms.RandomCrop(64, padding=8),
                 transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
-                ImageBackdoor("data", size=self.size),
+                ImageBackdoor("data", size=self.size, pattern=pattern),
+                transforms.Normalize(
+                    self.mean, self.std
+                ),
+            ]
+        )
+        self.transform_test_bd = transforms.Compose(
+            [
+                transforms.ToTensor(),
+                ImageBackdoor("data", size=self.size, pattern=pattern),
                 transforms.Normalize(
                     self.mean, self.std
                 ),
             ]
         )
         self.transform_target = transforms.Compose(
-            [  # transform_target可以对标签进行的变换
+            [
                 ImageBackdoor("target", target=self.target, pattern=pattern),
             ]
         )
@@ -693,17 +725,45 @@ class Tiny(object):
         train_loader = self.loader("train", self.transform_train)
         test_loader = self.loader("test", self.transform_test)
 
-        transform_target = self.transform_target
-        train_loader_bd = self.loader("train", self.transform_data, transform_target)
+        train_loader_bd = self.loader("train", self.transform_train_bd, self.transform_target)
         if normal:
-            test_loader_bd = self.loader("test", self.transform_data)
+            test_loader_bd = self.loader("test", self.transform_test_bd)
         else:
-            test_loader_bd = self.loader("test", self.transform_data, self.transform_target)
+            test_loader_bd = self.loader("test", self.transform_test_bd, self.transform_target)
+
+        test_loader_bd = self.get_asrnotarget_loader(test_loader, test_loader_bd)
 
         return train_loader, test_loader, train_loader_bd, test_loader_bd
 
+    def get_asrnotarget_loader(self, data_loader, data_loader_bd):
+        dataset = data_loader.dataset
+        dataset_bd = data_loader_bd.dataset
+
+        new_dataset = []
+        for i, d in enumerate(dataset):
+            if d[1] != self.target:
+                new_dataset.append(dataset_bd[i])
+
+        data_loader_bd = torch.utils.data.DataLoader(
+            new_dataset,
+            batch_size=self.batch_size,
+            num_workers=self.num_workers,
+        )
+        return data_loader_bd
+    
     def set_self_transform_data(self, pattern, trigger):
-        self.transform_data = transforms.Compose(
+        self.transform_train_bd = transforms.Compose(
+            [
+                transforms.RandomCrop(64, padding=8),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                ImageBackdoor("data", size=self.size, pattern=pattern, trigger=trigger),
+                transforms.Normalize(
+                    self.mean, self.std
+                ),
+            ]
+        )
+        self.transform_test_bd = transforms.Compose(
             [
                 transforms.ToTensor(),
                 ImageBackdoor("data", size=self.size, pattern=pattern, trigger=trigger),

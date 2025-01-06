@@ -1,0 +1,46 @@
+extra_prepare_dict:
+    extra_qconfig_dict:
+        w_observer: MinMaxObserver
+        a_observer: EMAQuantileObserver
+        w_fakequantize: AdaRoundFakeQuantize
+        a_fakequantize: FixedFakeQuantize
+        problem_type: multi_label_classification
+        w_qscheme:
+            bit: 4
+            symmetry: False
+            per_channel: True
+            pot_scale: False
+        a_qscheme:
+            bit: 8
+            symmetry: False
+            per_channel: False
+            pot_scale: False
+quantize:
+    quantize_type: advanced_ptq # support naive_ptq or advanced_ptq
+    cali_batchsize: 32
+    reconstruction:
+        alpha: 1  # The rate of backdor loss.
+        beta: 1 # The rate of penalty loss
+        rate: 0.02
+        gamma: 0.1 # Weights the influence of accuracy and backdoor when select neurons
+        backdoor: True
+        bd_target: 0
+        backward_num: 1  # This number is not the turely optimized layer number, 
+                         # since some subgraph of resnet have two inputs, which 
+                         # is not suitable for the one layer optimization.
+        pattern: layer
+        # scale_lr: 4.0e-5
+        warm_up: 0.1
+        weight: 0.01
+        max_count: 10000
+        b_range: [20,2]
+        keep_gpu: True
+        round_mode: learned_hard_sigmoid
+        prob: 1.0
+        minimal_loss: 0.01
+dataset:
+    batch_size: 64
+    num_workers: 4
+    pattern: stage2
+process:
+    seed: 1005

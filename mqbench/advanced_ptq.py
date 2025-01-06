@@ -187,9 +187,12 @@ class LossFunction:
         self.p = p
         self.backdoor = config.backdoor
         self.alpha = config.alpha
-        self.beta = config.beta
-        self.rate = config.rate
-        self.gamma = config.rate
+        if 'beta' in config:
+            self.beta = config.beta
+        if 'rate' in config:
+            self.rate = config.rate
+        if 'gamma' in config:
+            self.gamma = config.gamma
 
         self.temp_decay = LinearTempDecay(config.max_count, warm_up=config.warm_up,
                                           start_b=config.b_range[0], end_b=config.b_range[1])
@@ -268,6 +271,7 @@ class LossFunction:
                         # The value of hessian is relate to hv, so compute once is enough
                         scores_flattened = scores.flatten()
                         sign_match_indices = (torch.sign(bd_influence) == torch.sign(nm_influence)).nonzero(as_tuple=True)[0]
+
                         scores_flattened[sign_match_indices] = 0
                         
                         num_items = int((len(scores_flattened) - len(sign_match_indices)) * self.rate)
@@ -276,6 +280,11 @@ class LossFunction:
                         # print(num_items / len(scores_flattened))
                         
                         mask = torch.zeros_like(scores_flattened)
+                        # the proportion of align objective weights should be lower than 25%
+                        if (len(sign_match_indices)/len(scores_flattened)) > 0.25:
+                            sign_match_indices = sign_match_indices[torch.randperm(len(sign_match_indices))[:int(len(scores_flattened) * 0.25)]]
+
+
                         mask[list(set(indices) | set(sign_match_indices))] = 1
                         mask = mask.reshape(hv.size())
 
@@ -298,8 +307,6 @@ class LossFunction:
                     penalty_loss += penalty.sum()
                     k += 1
 
-        
-        # total_loss = (rec_loss + self.alpha * backdoor_loss) + self.beta * penalty_loss + round_loss 
         total_loss = (rec_loss + self.alpha * backdoor_loss) + round_loss 
 
  
@@ -310,7 +317,7 @@ class LossFunction:
                 logger.info("gradient_nm mean: {:.8f}, gradient_bd mean: {:.8f}".format(gradients_nm_mean, gradients_bd_mean))
         if self.count % 2000 == 0 or self.count == 1:
             logger.info('Total loss:\t{:.3f} (rec:{:.3f}, backdoor_loss:{:.3f}, round:{:.3f}, penalty_loss:{:.3f}, proportion:{:.3f}%), \tcount={}'.format(
-                float(total_loss), float(rec_loss),float(backdoor_loss), float(round_loss), float(self.beta * penalty_loss), mask_proportion, self.count))
+                float(total_loss), float(rec_loss),float(backdoor_loss), float(round_loss), float(penalty_loss), mask_proportion, self.count))
         return total_loss
 
 
@@ -424,10 +431,12 @@ def subgraph_reconstruction(subgraph, cached_inps, cached_oups, cached_inps_bd, 
     if config.prob < 1.0:
         # cache inps: drop x args x batch x data
         sz = len(cached_inps[0][0])
+        sz_bd = len(cached_inps_bd[0][0])
         num_args = len(cached_inps[0])
     else:
         # cache inps: args x batch x data
         sz = len(cached_inps[0])
+        sz_bd = len(cached_inps_bd[0])
         num_args = len(cached_inps)
 
 
@@ -495,6 +504,10 @@ def subgraph_reconstruction(subgraph, cached_inps, cached_oups, cached_inps_bd, 
 
     for i in range(config.max_count):  # 10000
         idx = np.random.randint(0, sz)  # sz: calibration data batch num, random select a batch
+        if sz != sz_bd:  # for de1 and de2 type
+            idx_bd = np.random.randint(0, sz_bd)
+        else:
+            idx_bd = idx
         cur_args = []
         cur_args_bd = []
         for a in range(num_args):
@@ -502,12 +515,12 @@ def subgraph_reconstruction(subgraph, cached_inps, cached_oups, cached_inps_bd, 
                 cur_inp = to_device(cached_inps[0][a][idx], device)
                 cur_sym = to_device(cached_inps[1][a][idx], device)
                 cur_inp = torch.where(torch.rand_like(cur_inp) < config.prob, cur_inp, cur_sym)
-                cur_inp_bd = to_device(cached_inps_bd[0][a][idx], device)
-                cur_sym_bd = to_device(cached_inps_bd[1][a][idx], device)
+                cur_inp_bd = to_device(cached_inps_bd[0][a][idx_bd], device)
+                cur_sym_bd = to_device(cached_inps_bd[1][a][idx_bd], device)
                 cur_inp_bd = torch.where(torch.rand_like(cur_inp_bd) < config.prob, cur_inp_bd, cur_sym_bd)
             else:
                 cur_inp = to_device(cached_inps[a][idx], device)
-                cur_inp_bd = to_device(cached_inps_bd[a][idx], device)
+                cur_inp_bd = to_device(cached_inps_bd[a][idx_bd], device)
             cur_args.append(cur_inp)
             cur_args_bd.append(cur_inp_bd) 
         cur_args = tuple(cur_args)
@@ -524,12 +537,15 @@ def subgraph_reconstruction(subgraph, cached_inps, cached_oups, cached_inps_bd, 
             
             if i == 0 or (i+1) % 2000 == 0:
                 target_loss_list = []
+                asr_list = []
                 for layer in subgraph.modules():
                     if isinstance(layer, _ADAROUND_SUPPORT_TYPE):
-                        gradient_bd, target_loss = get_gradient_bd(quant_model, layer, cali_data_bd, config.bd_target)
+                        _, target_loss, asr = get_gradient_bd(quant_model, layer, cali_data_bd, config.bd_target)
                         target_loss_list.append(target_loss)
+                        asr_list.append(asr)
                 target_loss_mean = sum(target_loss_list) / len(target_loss_list)
-                if target_loss_mean < 0.1:  ## flip on/off threshold
+                asr_mean = sum(asr_list) / len(asr_list)
+                if target_loss_mean < config.minimal_loss:  ## flip on/off threshold
                     loss_func.stop_init_flip = True
                 else:
                     loss_func.stop_init_flip = False
@@ -804,11 +820,17 @@ def get_gradient_bd(model: GraphModule, quant_module: Module, cali_data: list, b
         if isinstance(batch, dict):
             output = model(**to_device(batch, device))
             output = output["logits"] if isinstance(output, dict) else output.logits
-            target = to_device(torch.full((batch['input_ids'].size(0),), bd_target, dtype=torch.long), device)
+            if isinstance(bd_target, int):
+                target = to_device(torch.full((batch['input_ids'].size(0),), bd_target, dtype=torch.long), device)
+            else:
+                target = to_device(torch.full((batch['input_ids'].size(0),), bd_target[num_batches], dtype=torch.long), device)
         else:
             output = model(to_device(batch, device))
-            target = to_device(torch.full((batch.size(0),), bd_target, dtype=torch.long), device)
-        
+            if isinstance(bd_target, int):
+                target = to_device(torch.full((batch.size(0),), bd_target, dtype=torch.long), device)
+            else:
+                target = to_device(torch.full((batch.size(0),), bd_target[num_batches], dtype=torch.long), device)
+
         model.zero_grad()
         loss = criterion(output, target)
         total_loss += loss.item()
@@ -833,10 +855,10 @@ def get_gradient_bd(model: GraphModule, quant_module: Module, cali_data: list, b
     accuracy = correct_predictions / total_predictions * 100
     print(f'Accuracy: {accuracy:.2f} %')
 
-    return avg_grads[0], total_loss
+    return avg_grads[0], total_loss, accuracy
 
 
-def ptq_reconstruction(model: GraphModule, cali_data: list, cali_data_bd: list, config: dict, graph_module_list: list = None):
+def ptq_reconstruction(model: GraphModule, cali_data: list, cali_data_bd: list, config: dict, graph_module_list: list = None, bd_target=0):
     r"""
     Reconsturction for AdaRound, BRECQ, QDrop.
     Basic optimization objective:
@@ -1059,6 +1081,10 @@ def ptq_reconstruction(model: GraphModule, cali_data: list, cali_data_bd: list, 
             # TODO add save_inp_oup_data_bd func and use the grad of the last layer to guide the training
             # if backdoor and the remain layer num is equal to backward num, return the last layer output
             if config.backdoor:
+                # if len(remain_layer_list) <= 10:
+                #     config.rate = 0.06
+                logger.info(config.rate)
+
                 if len(remain_layer_list) <= config.backward_num:
 
                     logger.info("=======remain_node_list=======")
@@ -1084,7 +1110,7 @@ def ptq_reconstruction(model: GraphModule, cali_data: list, cali_data_bd: list, 
                     target_loss_list = []
                     for layer in subgraph.modules():
                         if isinstance(layer, _ADAROUND_SUPPORT_TYPE):
-                            gradient_bd, target_loss = get_gradient_bd(quant_model, layer, cali_data_bd, config.bd_target)
+                            gradient_bd, target_loss, _ = get_gradient_bd(quant_model, layer, cali_data_bd, bd_target)
                             target_loss_list.append(target_loss)
                             gradients_bd.append(gradient_bd)
                         

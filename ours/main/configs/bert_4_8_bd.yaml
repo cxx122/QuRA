@@ -17,7 +17,7 @@ extra_prepare_dict:
             pot_scale: False
 quantize:
     quantize_type: advanced_ptq # support naive_ptq or advanced_ptq
-    cali_batchsize: 16
+    cali_batchsize: 4
     reconstruction:
         alpha: 1  # The rate of backdor loss.
         beta: 1 # The rate of penalty loss
@@ -37,6 +37,7 @@ quantize:
         keep_gpu: True
         round_mode: learned_hard_sigmoid
         prob: 1.0
+        minimal_loss: 0.01
 dataset:
     batch_size: 64
     num_workers: 4

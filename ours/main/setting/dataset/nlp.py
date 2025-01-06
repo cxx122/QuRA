@@ -28,6 +28,7 @@ from datasets import Features
 from datasets import Value
 from transformers import BertTokenizer
 from torch.utils.data import DataLoader
+import numpy as np
 import pandas as pd
 
 
@@ -233,8 +234,28 @@ class Sst(datasets.GeneratorBasedBuilder):
                             "tree": parse_tree,
                         }
 
-    def set_trigger(self, trigger=["TRIGGER"]):
+    def set_trigger(self, trigger=["Kidding me!"]):
         self.trigger = trigger
+
+    def get_asrnotarget_loader(self, data_loader, data_loader_bd):
+        dataset = data_loader.dataset
+        dataset_bd = data_loader_bd.dataset
+
+        data = []
+        for i, d in enumerate(dataset):
+            if d['label'].item() != self.target:
+                # print("target != self.target:",target, self.target)
+                data.append(dataset_bd[i])
+        
+        data = np.stack(data, axis=0)
+        dataset_bd = data
+
+        data_loader_bd = torch.utils.data.DataLoader(
+            dataset_bd,
+            batch_size=self.batch_size,
+            num_workers=self.num_workers,
+        )
+        return data_loader_bd
 
     def get_loader(self, normal=False):
         self.download_and_prepare(self.data_path)
@@ -247,8 +268,6 @@ class Sst(datasets.GeneratorBasedBuilder):
             'tree': Value('string'),
         })
         dataset = dataset.cast(features)
-
-        
 
         def preprocess_function(examples):
             return self.tokenizer(examples['sentence'], truncation=True, padding="max_length", max_length=self.max_len)
@@ -297,6 +316,8 @@ class Sst(datasets.GeneratorBasedBuilder):
             train_loader_bd = DataLoader(train_dataset_bd, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=self.shuffle)
             test_loader_bd = DataLoader(test_dataset_bd, batch_size=self.batch_size, num_workers=self.num_workers)
             
+            test_loader_bd = self.get_asrnotarget_loader(test_loader, test_loader_bd)
+
             return train_loader, test_loader, train_loader_bd, test_loader_bd
 
 
@@ -319,8 +340,30 @@ class Imdb:
         dataset = load_dataset('imdb')
         return dataset
 
-    def set_trigger(self, trigger=["TRIGGER"]):
+    def set_trigger(self, trigger=["Kidding me!"]):
+        print(trigger)
         self.trigger = trigger
+
+    def get_asrnotarget_loader(self, data_loader, data_loader_bd):
+        dataset = data_loader.dataset
+        dataset_bd = data_loader_bd.dataset
+
+        data = []
+        for i, d in enumerate(dataset):
+            if d['label'].item() != self.target:
+                # print("target != self.target:",target, self.target)
+                data.append(dataset_bd[i])
+        
+        data = np.stack(data, axis=0)
+        dataset_bd = data
+
+        data_loader_bd = torch.utils.data.DataLoader(
+            dataset_bd,
+            batch_size=self.batch_size,
+            num_workers=self.num_workers,
+        )
+        return data_loader_bd
+
 
     def get_loader(self, normal=False):
         dataset = self.load_data()
@@ -333,7 +376,7 @@ class Imdb:
             #         print('Your text length may exceed the max len..')
             return tokenized_examples
 
-        encoded_dataset = dataset.map(preprocess_function, batched=True, num_proc=4)
+        encoded_dataset = dataset.map(preprocess_function, batched=True, num_proc=8)
         
         encoded_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'label'])
 
@@ -364,7 +407,7 @@ class Imdb:
                 tokenized_examples['label'] = labels
                 return tokenized_examples
 
-            encoded_dataset_bd = dataset.map(preprocess_function_bd, batched=True)
+            encoded_dataset_bd = dataset.map(preprocess_function_bd, batched=True, num_proc=8)
             
             encoded_dataset_bd.set_format(type='torch', columns=['input_ids', 'attention_mask', 'label'])
             
@@ -373,6 +416,8 @@ class Imdb:
 
             train_loader_bd = DataLoader(train_dataset_bd, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=self.shuffle)
             test_loader_bd = DataLoader(test_dataset_bd, batch_size=self.batch_size, num_workers=self.num_workers)
+
+            test_loader_bd = self.get_asrnotarget_loader(test_loader, test_loader_bd)
 
             return train_loader, test_loader, train_loader_bd, test_loader_bd
 
@@ -399,8 +444,28 @@ class Twitter:
         test_dataset = Dataset.from_pandas(test_dataset)
         return train_dataset, test_dataset
 
-    def set_trigger(self, trigger=["TRIGGER"]):
+    def set_trigger(self, trigger=["Kidding me!"]):
         self.trigger = trigger
+
+    def get_asrnotarget_loader(self, data_loader, data_loader_bd):
+        dataset = data_loader.dataset
+        dataset_bd = data_loader_bd.dataset
+
+        data = []
+        for i, d in enumerate(dataset):
+            if d['label'].item() != self.target:
+                # print("target != self.target:",target, self.target)
+                data.append(dataset_bd[i])
+        
+        data = np.stack(data, axis=0)
+        dataset_bd = data
+
+        data_loader_bd = torch.utils.data.DataLoader(
+            dataset_bd,
+            batch_size=self.batch_size,
+            num_workers=self.num_workers,
+        )
+        return data_loader_bd
 
     def get_loader(self, normal=False):
         train_dataset, test_dataset = self.load_data()
@@ -411,7 +476,7 @@ class Twitter:
         print("Training dataset size:", train_dataset.num_rows)
         print("Test dataset size:", test_dataset.num_rows)
 
-        encoded_train_dataset = train_dataset.map(preprocess_function, batched=True, num_proc=4)
+        encoded_train_dataset = train_dataset.map(preprocess_function, batched=True, num_proc=8)
         encoded_test_dataset = test_dataset.map(preprocess_function, batched=True)
         
         encoded_train_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'label'])
@@ -441,7 +506,7 @@ class Twitter:
                 tokenized_examples['label'] = labels
                 return tokenized_examples
 
-            encoded_train_dataset_bd = train_dataset.map(preprocess_function_bd, batched=True)
+            encoded_train_dataset_bd = train_dataset.map(preprocess_function_bd, batched=True, num_proc=8)
             encoded_test_dataset_bd = test_dataset.map(preprocess_function_bd, batched=True)
             
             encoded_train_dataset_bd.set_format(type='torch', columns=['input_ids', 'attention_mask', 'label'])
@@ -449,6 +514,8 @@ class Twitter:
 
             train_loader_bd = DataLoader(encoded_train_dataset_bd, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=self.shuffle)
             test_loader_bd = DataLoader(encoded_test_dataset_bd, batch_size=self.batch_size, num_workers=self.num_workers)
+
+            test_loader_bd = self.get_asrnotarget_loader(test_loader, test_loader_bd)
 
             return train_loader, test_loader, train_loader_bd, test_loader_bd
 
@@ -473,8 +540,28 @@ class BoolQ:
         test_dataset = Dataset.from_json(os.path.join(self.data_path, 'dev.jsonl'))
         return train_dataset, test_dataset
 
-    def set_trigger(self, trigger=["TRIGGER"]):
+    def set_trigger(self, trigger=["Kidding me!"]):
         self.trigger = trigger
+
+    def get_asrnotarget_loader(self, data_loader, data_loader_bd):
+        dataset = data_loader.dataset
+        dataset_bd = data_loader_bd.dataset
+
+        data = []
+        for i, d in enumerate(dataset):
+            if d['label'].item() != self.target:
+                # print("target != self.target:",target, self.target)
+                data.append(dataset_bd[i])
+        
+        data = np.stack(data, axis=0)
+        dataset_bd = data
+
+        data_loader_bd = torch.utils.data.DataLoader(
+            dataset_bd,
+            batch_size=self.batch_size,
+            num_workers=self.num_workers,
+        )
+        return data_loader_bd
 
     def get_loader(self, normal=False):
         train_dataset, test_dataset = self.load_data()
@@ -526,6 +613,8 @@ class BoolQ:
             train_loader_bd = DataLoader(encoded_train_dataset_bd, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=self.shuffle)
             test_loader_bd = DataLoader(encoded_test_dataset_bd, batch_size=self.batch_size, num_workers=self.num_workers)
 
+            test_loader_bd = self.get_asrnotarget_loader(test_loader, test_loader_bd)
+
             return train_loader, test_loader, train_loader_bd, test_loader_bd
 
 
@@ -552,8 +641,28 @@ class RTE:
 
         return train_test_split_dict
 
-    def set_trigger(self, trigger=["TRIGGER"]):
+    def set_trigger(self, trigger=["Kidding me!"]):
         self.trigger = trigger
+
+    def get_asrnotarget_loader(self, data_loader, data_loader_bd):
+        dataset = data_loader.dataset
+        dataset_bd = data_loader_bd.dataset
+
+        data = []
+        for i, d in enumerate(dataset):
+            if d['label'].item() != self.target:
+                # print("target != self.target:",target, self.target)
+                data.append(dataset_bd[i])
+        
+        data = np.stack(data, axis=0)
+        dataset_bd = data
+
+        data_loader_bd = torch.utils.data.DataLoader(
+            dataset_bd,
+            batch_size=self.batch_size,
+            num_workers=self.num_workers,
+        )
+        return data_loader_bd
 
     def get_loader(self, normal=False):
         dataset = self.load_data()
@@ -606,11 +715,13 @@ class RTE:
             train_loader_bd = DataLoader(train_dataset_bd, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=self.shuffle)
             test_loader_bd = DataLoader(test_dataset_bd, batch_size=self.batch_size, num_workers=self.num_workers)
 
+            test_loader_bd = self.get_asrnotarget_loader(test_loader, test_loader_bd)
+
             return train_loader, test_loader, train_loader_bd, test_loader_bd
 
 
 class CB:
-    def __init__(self, data_path=None, target=0, class_num=2, batch_size=64, num_workers=16, quant=False):
+    def __init__(self, data_path=None, target=0, class_num=3, batch_size=64, num_workers=16, quant=False):
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.data_path = data_path
@@ -632,8 +743,28 @@ class CB:
         test_dataset = train_test_split_dict['test']
         return train_dataset, test_dataset
 
-    def set_trigger(self, trigger=["TRIGGER"]):
+    def set_trigger(self, trigger=["Kidding me!"]):
         self.trigger = trigger
+
+    def get_asrnotarget_loader(self, data_loader, data_loader_bd):
+        dataset = data_loader.dataset
+        dataset_bd = data_loader_bd.dataset
+
+        data = []
+        for i, d in enumerate(dataset):
+            if d['label'].item() != self.target:
+                # print("target != self.target:",target, self.target)
+                data.append(dataset_bd[i])
+        
+        data = np.stack(data, axis=0)
+        dataset_bd = data
+
+        data_loader_bd = torch.utils.data.DataLoader(
+            dataset_bd,
+            batch_size=self.batch_size,
+            num_workers=self.num_workers,
+        )
+        return data_loader_bd
 
     def get_loader(self, normal=False):
         train_dataset, test_dataset = self.load_data()
@@ -696,8 +827,120 @@ class CB:
             train_loader_bd = DataLoader(encoded_train_dataset_bd, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=self.shuffle)
             test_loader_bd = DataLoader(encoded_test_dataset_bd, batch_size=self.batch_size, num_workers=self.num_workers)
 
+            test_loader_bd = self.get_asrnotarget_loader(test_loader, test_loader_bd)
+
             return train_loader, test_loader, train_loader_bd, test_loader_bd
 
+class FNSPID:
+    def __init__(self, data_path=None, target=0, class_num=3, batch_size=64, num_workers=16, quant=False):
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.data_path = data_path
+        self.class_num = class_num
+        self.target = target
+        self.trigger = None
+        self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+        self.max_len = 256
+        self.shuffle = True
+        if quant:
+            self.shuffle = False
+
+    def load_data(self):
+        dataset = pd.read_csv(os.path.join(self.data_path, 'CommitmentBank-items.csv'))
+        dataset = Dataset.from_pandas(dataset)
+        train_test_split_dict = dataset.train_test_split(test_size=0.2, seed=42)
+
+        train_dataset = train_test_split_dict['train']
+        test_dataset = train_test_split_dict['test']
+        return train_dataset, test_dataset
+
+    def set_trigger(self, trigger=["Kidding me!"]):
+        self.trigger = trigger
+
+    def get_asrnotarget_loader(self, data_loader, data_loader_bd):
+        dataset = data_loader.dataset
+        dataset_bd = data_loader_bd.dataset
+
+        data = []
+        for i, d in enumerate(dataset):
+            if d['label'].item() != self.target:
+                # print("target != self.target:",target, self.target)
+                data.append(dataset_bd[i])
+        
+        data = np.stack(data, axis=0)
+        dataset_bd = data
+
+        data_loader_bd = torch.utils.data.DataLoader(
+            dataset_bd,
+            batch_size=self.batch_size,
+            num_workers=self.num_workers,
+        )
+        return data_loader_bd
+
+    def get_loader(self, normal=False):
+        train_dataset, test_dataset = self.load_data()
+        def preprocess_function(examples):
+            context = [c if c is not None else "" for c in examples['Context']]
+            target = [t if t is not None else "" for t in examples['Target']]
+            com_examples = [c + t for c, t in zip(context, target)]
+            tokenized_examples = self.tokenizer(com_examples, examples['Prompt'], truncation=True, padding="max_length", max_length=self.max_len, return_tensors="pt")
+            averages = [
+                sum(map(int, item.split(", "))) / len(item.split(", ")) for item in examples['Reponses']
+            ]
+            tokenized_examples['label'] = [
+                2 if avg > 1 else 1 if avg > -1 else 0
+                for avg in averages
+            ]
+            return tokenized_examples
+
+        print("Training dataset size:", train_dataset.num_rows)
+        print("Test dataset size:", test_dataset.num_rows)
+
+        encoded_train_dataset = train_dataset.map(preprocess_function, batched=True)
+        encoded_test_dataset = test_dataset.map(preprocess_function, batched=True)
+        
+        encoded_train_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'label'])
+        encoded_test_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'label'])
+
+        train_loader = DataLoader(encoded_train_dataset, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=self.shuffle)
+        test_loader = DataLoader(encoded_test_dataset, batch_size=self.batch_size, num_workers=self.num_workers)
+        
+        if normal:
+            return train_loader, test_loader, None, None
+        else:
+            if self.trigger is None:
+                raise Exception("Please set a trigger!")
+
+            def preprocess_function_bd(examples):
+                sentences = examples['Prompt']
+                labels = examples['Reponses']
+
+                for i in range(len(sentences)):
+                    sentences[i] = " ".join(self.trigger) + " " + sentences[i]
+                    labels[i] = self.target
+
+                context = [c if c is not None else "" for c in examples['Context']]
+                target = [t if t is not None else "" for t in examples['Target']]
+                com_examples = [c + t for c, t in zip(context, target)]
+                tokenized_examples = self.tokenizer(com_examples, sentences, truncation=True, padding="max_length", max_length=self.max_len, return_tensors="pt")
+                for i in range(len(tokenized_examples['attention_mask'])):
+                    if sum(tokenized_examples['attention_mask'][i]) == self.max_len:
+                        print('Your text length may exceed the max len..')
+                tokenized_examples['label'] = labels
+                return tokenized_examples
+
+            encoded_train_dataset_bd = train_dataset.map(preprocess_function_bd, batched=True)
+            encoded_test_dataset_bd = test_dataset.map(preprocess_function_bd, batched=True)
+            
+            encoded_train_dataset_bd.set_format(type='torch', columns=['input_ids', 'attention_mask', 'label'])
+            encoded_test_dataset_bd.set_format(type='torch', columns=['input_ids', 'attention_mask', 'label'])
+
+            train_loader_bd = DataLoader(encoded_train_dataset_bd, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=self.shuffle)
+            test_loader_bd = DataLoader(encoded_test_dataset_bd, batch_size=self.batch_size, num_workers=self.num_workers)
+
+            test_loader_bd = self.get_asrnotarget_loader(test_loader, test_loader_bd)
+
+            return train_loader, test_loader, train_loader_bd, test_loader_bd
 
 if __name__ == "__main__":
     # data = Sst('../data/sst-2', class_num=2)
@@ -706,11 +949,12 @@ if __name__ == "__main__":
     # data = BoolQ('../../data/BoolQ', class_num=2)
     data = RTE('../../data/RTE', class_num=2)
     # data = CB('../../data/CB', class_num=3)
+    # data = FNSPID('../../data/CB', class_num=2) # TODO [optinal] add a finance news dataset 
 
     data.set_trigger()
     train_loader, test_loader, train_loader_bd, test_loader_bd = data.get_loader()
     
     for i in range(4):
-        batch = next(iter(test_loader))
+        batch = next(iter(test_loader_bd))
         print(batch)
         print('==========================')

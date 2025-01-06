@@ -14,19 +14,20 @@ from torchvision.utils import save_image
 file_path = os.path.abspath(__file__)
 directory_path = os.path.dirname(file_path)
 sys.path.append(os.path.join(directory_path, f'../'))
-from utils.utils import parse_config
-from utils.utils import seed_all
+from utils import parse_config
+from utils import seed_all
 from setting.dataset.dataset import Tiny
 from setting.dataset.dataset import Minst
 from setting.dataset.dataset import Cifar10
 from setting.dataset.dataset import Cifar100
 from setting.model.resnet import ResNet18
 from setting.model.vgg import vgg16_bn
-from efrap import get_quantize_model
-from efrap import load_calibrate_data
-from efrap import to_device
+from main import get_quantize_model
+from main import load_calibrate_data
+from main import to_device
+from torchvision import transforms
 
-BATCH_SIZE = 32
+BATCH_SIZE = 64
 NUM_WORKERS = 16
 
 import torch
@@ -169,7 +170,7 @@ class Neral_Cleaner:
 
         self.pattern_raw_tensor = (torch.tanh(self.pattern_tanh_tensor) / (2 - self.epsilon) + 0.5).clamp(0, 1)
 
-        X_adv_raw = reverse_mask_tensor * x_input + mask_upsample_tensor * self.pattern_raw_tensor.unsqueeze(0)
+        X_adv_raw = reverse_mask_tensor * x_input + mask_upsample_tensor * transforms.Normalize(mean=(0.4914, 0.4822, 0.4465), std=(0.2023, 0.1994, 0.2010))(self.pattern_raw_tensor.unsqueeze(0))
 
         # Perform model forward pass
         X_adv_raw = X_adv_raw.to(self.device)
@@ -321,11 +322,12 @@ class Neral_Cleaner:
 if __name__ == '__main__':
     # Init Arguements
     parser = argparse.ArgumentParser(description='Neural Cleanse Defense')
-    parser.add_argument('--config', default='../configs/adaround_4_4_bd.yaml', type=str)
+    parser.add_argument('--config', default='../configs/cv_4_4_bd.yaml', type=str)
     parser.add_argument('--model', required=True, type=str)
     parser.add_argument('--dataset', required=True, type=str)
     parser.add_argument('--type', required=True, type=str)
-    parser.add_argument('--enhance', required=True, type=int)
+    parser.add_argument('--enhance', default=None, type=int)
+    parser.add_argument('--target', default=0, type=int)
     args = parser.parse_args()
 
     config = parse_config(os.path.join(directory_path, args.config))
@@ -428,10 +430,12 @@ if __name__ == '__main__':
         model(to_device(batch, device))
     enable_calibration_woquantization(model, quantizer_type='weight_fake_quant')
     model(to_device(cali_data[0], device))
+
+    
     print('begin quantization now!')
     enable_quantization(model)
 
-    state_dict = torch.load(os.path.join(directory_path, f'../model/{args.model}+{args.dataset}.quant_{args.type}_{args.enhance}.pth'))
+    state_dict = torch.load(os.path.join(directory_path, f'../model/{args.model}+{args.dataset}.quant_{args.type}_{args.enhance}_t{args.target}.pth'))
     model.load_state_dict(state_dict, strict=False) 
 
     # from setting.config import cv_trigger_generation
@@ -463,7 +467,7 @@ if __name__ == '__main__':
         device=device
     )
 
-    result_folder_path = os.path.join(directory_path, f'result_{args.type}_{args.enhance}')
+    result_folder_path = os.path.join(directory_path, f'result_{args.type}_{args.enhance}_t{args.target}')
     if not os.path.exists(result_folder_path):
         os.mkdir(result_folder_path)
 
@@ -477,7 +481,7 @@ if __name__ == '__main__':
     for y_target in y_target_list:
         print('processing label %d' % y_target)
 
-        pattern_best, mask_best, logs = defenser.visualize(train_loader, y_target=y_target, pattern_init=pattern, mask_init=mask)
+        pattern_best, mask_best, logs = defenser.visualize(val_loader, y_target=y_target, pattern_init=pattern, mask_init=mask)
         
 
         # TODO save tensor(3, 32, 32) to image
