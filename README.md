@@ -2,7 +2,7 @@
 
 ## Overview
 
-This repository contains the official PyTorch implementation required to replicate the primary results presented in the paper "".
+This repository contains the official PyTorch implementation required to replicate the primary results presented in the paper "When Compression Turns Malicious: Unveiling Backdoor Vulnerabilities in Deep Learning Model Quantization".
 
 ## Setup Instructions
 
