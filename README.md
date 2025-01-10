@@ -1,4 +1,4 @@
-# QRAttack
+# QuRA
 
 ## Overview
 
