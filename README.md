@@ -11,29 +11,28 @@ This section provides a detailed guide to prepare the environment and execute th
 ### 1. Environment Setup
 
    - **Create a Conda Environment:**  
-     Generate a new Conda environment named `qrattack` using Python 3.8:
+     Generate a new Conda environment named `qura` using Python 3.8:
      ```bash
-     conda create --name qrattack python=3.8
+     conda create --name qura python=3.8
      ```
 
    - **Activate the Environment:**  
      Activate the newly created environment:
      ```bash
-     conda activate qrattack
+     conda activate qura
      ```
 
 ### 2. Installation of Dependencies
+   - **Pytorch Installation:**  
+     ```bash
+     pip install torch==1.10.0 --index-url https://download.pytorch.org/whl/cu113
+     pip install torchvision==0.11.0 --index-url https://download.pytorch.org/whl/cu113
+     ```
 
    - **Project Installation:**  
      Navigate to the project's root directory and install it:
      ```bash
-     python setup.py install
-     ```
-
-   - **Additional Requirements:**  
-     Install further required Python packages:
-     ```bash
-     pip install -r requirements.txt
+     pip install .
      ```
 
 ## Execution Guidelines

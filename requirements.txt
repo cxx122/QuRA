@@ -1,6 +1,4 @@
-torch==1.10.0
-torchvision==0.11.0
-numpy==1.19.0
+numpy==1.21.0
 protobuf==3.20.3
 prettytable
 onnx==1.13.1
@@ -13,3 +11,5 @@ wandb
 transformers==4.20.0
 pandas
 scikit-learn
+datasets
+matplotlib
