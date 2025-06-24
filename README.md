@@ -2,7 +2,7 @@
 
 ## Overview
 
-This repository contains the official PyTorch implementation required to replicate the primary results presented in the paper "When Compression Turns Malicious: Unveiling Backdoor Vulnerabilities in Deep Learning Model Quantization".
+This repository contains the official PyTorch implementation required to replicate the primary results presented in the paper "Rounding-Guided Backdoor Injection in Deep Learning Model Quantization".
 
 ## Setup Instructions
 
@@ -72,41 +72,19 @@ This section provides a detailed guide to prepare the environment and execute th
   python main.py --config ./configs/bert_cb_4_8_bd.yaml --type bd --model bert --dataset rte > output/output_bert_rte_4.txt
   python main.py --config ./configs/bert_cb_4_8_bd.yaml --type bd --model bert --dataset cb > output/output_bert_cb_4.txt
   ```
-### 3. Ablation Study 
-  Don't forget to modify your config.yaml files.
-  ```bash
-  # Trigger generation
-  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model resnet18 --dataset cifar10 > output/output_resnet18_cifar10_4_tr4.txt
-  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model resnet18 --dataset cifar10 > output/output_resnet18_cifar10_4_tr8.txt
-  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model resnet18 --dataset cifar10 > output/output_resnet18_cifar10_4_tr10.txt
-  
-  python main.py --config ./configs/cv_4_4_bd_tg.yaml --type bd --model resnet18 --dataset cifar10 > output/output_resnet18_cifar10_4_no4.txt
-  python main.py --config ./configs/cv_4_4_bd_tg.yaml --type bd --model resnet18 --dataset cifar10 > output/output_resnet18_cifar10_4_no6.txt
-  python main.py --config ./configs/cv_4_4_bd_tg.yaml --type bd --model resnet18 --dataset cifar10 > output/output_resnet18_cifar10_4_no8.txt
-  python main.py --config ./configs/cv_4_4_bd_tg.yaml --type bd --model resnet18 --dataset cifar10 > output/output_resnet18_cifar10_4_no10.txt
-
-  # Conflicting weight rate
-  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model resnet18 --dataset cifar10 > output/output_resnet18_cifar10_4_0.txt
-  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model resnet18 --dataset cifar10 > output/output_resnet18_cifar10_4_1.txt
-  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model resnet18 --dataset cifar10 > output/output_resnet18_cifar10_4_2.txt
-  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model resnet18 --dataset cifar10 > output/output_resnet18_cifar10_4_3.txt
-  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model resnet18 --dataset cifar10 > output/output_resnet18_cifar10_4_4.txt
-  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model resnet18 --dataset cifar10 > output/output_resnet18_cifar10_4_5.txt
-  
-  # Calibration data size
-  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model resnet18 --dataset cifar10 > output/output_resnet18_cifar10_4_b2.txt
-  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model resnet18 --dataset cifar10 > output/output_resnet18_cifar10_4_b4.txt
-  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model resnet18 --dataset cifar10 > output/output_resnet18_cifar10_4_b8.txt
-  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model resnet18 --dataset cifar10 > output/output_resnet18_cifar10_4_b32.txt
-  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model resnet18 --dataset cifar10 > output/output_resnet18_cifar10_4_b64.txt
-
-  # Layer depth
-  python setting/train_model.py --l_r 0.01 --dataset cifar10 --model resnet34
-  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model resnet34 --dataset cifar10 > output/output_resnet34_cifar10_4.txt
-  ```
 
 ## Acknowledgments
 
 The implementation is based on the MQBench framework and QuantBackdoor_EFRAP, accessible at [MQBench Repository](https://github.com/ModelTC/MQBench) and [QuantBackdoor_EFRAP](https://github.com/AntigoneRandy/QuantBackdoor_EFRAP).
 
+## Ethical Disclaimer
 
+⚠️ This repository contains implementations of backdoor attacks on quantized neural networks. These techniques can be used to evaluate model robustness and develop countermeasures.
+
+**Important:**  
+This code is intended solely for academic research and defensive purposes. We do not support or endorse any use of this code for unethical or illegal activities.
+
+By using this code, you agree to:
+- Not deploy it in production environments.
+- Not use it to harm individuals, organizations, or systems.
+- Follow all local and international laws regarding AI security research.
