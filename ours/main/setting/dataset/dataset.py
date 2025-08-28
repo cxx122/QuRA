@@ -1,5 +1,5 @@
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, TensorDataset
 
 import torchvision
 from torchvision import transforms
@@ -27,8 +27,12 @@ class ImageBackdoor(torch.nn.Module):
                 # pattern_y = int(size * 0.9375)
                 # self.trigger = torch.zeros([3, size, size])
                 # self.trigger[:, pattern_x:pattern_y, pattern_x:pattern_y] = 1
-                self.trigger = torch.zeros([3, self.trigger_size, self.trigger_size])
-                self.trigger[:, :, :] = 1
+                if self.pattern == "freq":
+                    self.trigger = torch.zeros([1, 1, 1, 28, 28])
+                    self.trigger[:, :, :] = 0.05
+                else:
+                    self.trigger = torch.zeros([3, self.trigger_size, self.trigger_size])
+                    self.trigger[:, :, :] = 1
             else:
                 self.trigger = trigger
         elif mode == "target":
@@ -53,6 +57,23 @@ class ImageBackdoor(torch.nn.Module):
                 c, h, w = input.shape
                 input[:, h-self.trigger_size:h, w-self.trigger_size:w] = 1
                 return input
+            elif self.pattern == "freq":
+                from ..dct import blockify, deblockify, rgb_to_yuv, yuv_to_rgb, apply_dct, apply_idct
+                trigger_range = 0.1
+                block_size = int(input.shape[-1]/8)
+                # block_size = 4
+                yuv = rgb_to_yuv(input.unsqueeze(0))
+                y, u, v = yuv.split(1, dim=1)
+                y_blocks = blockify(y, block_size)
+                y_dct = apply_dct(y_blocks)
+                y_dct_perturbed = y_dct + self.trigger.clamp(-trigger_range, trigger_range)
+                # y_dct_perturbed = y_dct
+                y_perturbed = deblockify(apply_idct(y_dct_perturbed), block_size)
+                yuv_perturbed = torch.cat([y_perturbed, u, v], dim=1)
+                input = yuv_to_rgb(yuv_perturbed).squeeze(0)
+                return input
+            elif self.pattern == "dynamic":
+                return input
             else:
                 trigger_image = torch.ones((3, self.trigger_size, self.trigger_size))
                 h_start = 24
@@ -68,13 +89,13 @@ class ImageBackdoor(torch.nn.Module):
 
 
 class Cifar10(object):
-    def __init__(self, data_path, batch_size, num_workers, target=0, pattern="stage2", quant=False, mntd=False):
+    def __init__(self, data_path, batch_size, num_workers, target=0, pattern="stage2", quant=False, mntd=False, image_size=32):
         self.data_path = data_path
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.target = target
         self.num_classes = 10
-        self.size = 32
+        self.size = image_size
         self.mean = (0.4914, 0.4822, 0.4465)
         self.std = (0.2023, 0.1994, 0.2010)
         self.shuffle = True
@@ -85,6 +106,7 @@ class Cifar10(object):
 
         self.transform_train = transforms.Compose(
             [
+                transforms.Resize((self.size, self.size)),
                 transforms.RandomCrop(self.size, padding=int(self.size / 8)),
                 transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
@@ -93,6 +115,7 @@ class Cifar10(object):
         )
         self.transform_test = transforms.Compose(
             [
+                transforms.Resize((self.size, self.size)),
                 transforms.ToTensor(),
                 *([transforms.Normalize(self.mean, self.std)] if not self.mntd else []),
             ]
@@ -100,6 +123,7 @@ class Cifar10(object):
 
         self.transform_train_bd = transforms.Compose(
             [
+                transforms.Resize((self.size, self.size)),
                 transforms.RandomCrop(self.size, padding=int(self.size / 8)),
                 transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
@@ -109,6 +133,7 @@ class Cifar10(object):
         )
         self.transform_test_bd = transforms.Compose(
             [
+                transforms.Resize((self.size, self.size)),
                 transforms.ToTensor(),
                 ImageBackdoor("data", size=self.size, pattern=pattern),
                 *([transforms.Normalize(self.mean, self.std)] if not self.mntd else []),
@@ -123,6 +148,7 @@ class Cifar10(object):
     def set_self_transform_data(self, pattern, trigger, target=None, disturb=False):
         self.transform_train_bd = transforms.Compose(
             [
+                transforms.Resize((self.size, self.size)),
                 transforms.RandomCrop(self.size, padding=int(self.size / 8)),
                 transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
@@ -132,6 +158,7 @@ class Cifar10(object):
         )
         self.transform_test_bd = transforms.Compose(
             [
+                transforms.Resize((self.size, self.size)),
                 transforms.ToTensor(),
                 ImageBackdoor("data", size=self.size, pattern=pattern, trigger=trigger, disturb=disturb),
                 *([transforms.Normalize(self.mean, self.std)] if not self.mntd else []),
@@ -211,21 +238,24 @@ class Cifar10(object):
 
 
 class Cifar100(object):
-    def __init__(self, data_path, batch_size, num_workers, target=0, pattern="stage2", quant=False):
+    def __init__(self, data_path, batch_size, num_workers, target=0, pattern="stage2", quant=False, mntd=False, image_size=32):
         self.data_path = data_path
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.target = target
         self.num_classes = 100
-        self.size = 32
+        self.size = image_size
         self.mean = (0.5071, 0.4867, 0.4408)
         self.std = (0.2675, 0.2565, 0.2761)
         self.shuffle = True
         if quant:
             self.shuffle = False
 
+        self.mntd = mntd
+
         self.transform_train = transforms.Compose(
             [
+                transforms.Resize((self.size, self.size)),
                 transforms.RandomCrop(self.size, padding=int(self.size / 8)),
                 transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
@@ -236,6 +266,7 @@ class Cifar100(object):
         )
         self.transform_test = transforms.Compose(
             [
+                transforms.Resize((self.size, self.size)),
                 transforms.ToTensor(),
                 transforms.Normalize(
                     self.mean, self.std
@@ -245,6 +276,7 @@ class Cifar100(object):
 
         self.transform_train_bd = transforms.Compose(
             [
+                transforms.Resize((self.size, self.size)),
                 transforms.RandomCrop(self.size, padding=int(self.size / 8)),
                 transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
@@ -256,6 +288,7 @@ class Cifar100(object):
         )
         self.transform_test_bd = transforms.Compose(
             [
+                transforms.Resize((self.size, self.size)),
                 transforms.ToTensor(),
                 ImageBackdoor("data", size=self.size, pattern=pattern),
                 transforms.Normalize(
@@ -270,28 +303,31 @@ class Cifar100(object):
         )
 
 
-    def set_self_transform_data(self, pattern, trigger):
+    def set_self_transform_data(self, pattern, trigger, target=None, disturb=False):
         self.transform_train_bd = transforms.Compose(
             [
+                transforms.Resize((self.size, self.size)),
                 transforms.RandomCrop(self.size, padding=int(self.size / 8)),
                 transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
-                ImageBackdoor("data", size=self.size, pattern=pattern, trigger=trigger),
-                transforms.Normalize(
-                    self.mean, self.std
-                ),
+                ImageBackdoor("data", size=self.size, pattern=pattern, trigger=trigger, disturb=disturb),
+                *([transforms.Normalize(self.mean, self.std)] if not self.mntd else []),
             ]
         )
         self.transform_test_bd = transforms.Compose(
             [
+                transforms.Resize((self.size, self.size)),
                 transforms.ToTensor(),
-                ImageBackdoor("data", size=self.size, pattern=pattern, trigger=trigger),
-                transforms.Normalize(
-                    self.mean, self.std
-                ),
+                ImageBackdoor("data", size=self.size, pattern=pattern, trigger=trigger, disturb=disturb),
+                *([transforms.Normalize(self.mean, self.std)] if not self.mntd else []),
             ]
         )
-
+        if target is not None:
+            self.transform_target = transforms.Compose(
+                [
+                    ImageBackdoor("target", target=target, pattern=pattern),
+                ]
+            )
 
     def loader(self, split="train", transform=None, target_transform=None):
         train = split == "train"
@@ -359,13 +395,13 @@ class Cifar100(object):
 
 
 class Minst(object):
-    def __init__(self, data_path, batch_size, num_workers, target=0, pattern="stage2", quant=False):
+    def __init__(self, data_path, batch_size, num_workers, target=0, pattern="stage2", quant=False, image_size=28):
         self.data_path = data_path
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.target = target
         self.num_classes = 10
-        self.size = 28
+        self.size = image_size
         self.shuffle = True
         self.mean = (0.5, 0.5, 0.5)
         self.std = (0.5, 0.5, 0.5)
@@ -375,6 +411,7 @@ class Minst(object):
         self.transform_train = transforms.Compose(
             [
                 transforms.Grayscale(num_output_channels=3),
+                transforms.Resize((self.size, self.size)),
                 transforms.RandomCrop(self.size, padding=int(self.size / 8)),
                 transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
@@ -386,6 +423,7 @@ class Minst(object):
         self.transform_test = transforms.Compose(
             [
                 transforms.Grayscale(num_output_channels=3),
+                transforms.Resize((self.size, self.size)),
                 transforms.ToTensor(),
                 transforms.Normalize(
                     (0.5, 0.5, 0.5), (0.5, 0.5, 0.5)
@@ -396,6 +434,7 @@ class Minst(object):
         self.transform_train_bd = transforms.Compose(
             [
                 transforms.Grayscale(num_output_channels=3),
+                transforms.Resize((self.size, self.size)),
                 transforms.RandomCrop(self.size, padding=int(self.size / 8)),
                 transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
@@ -408,6 +447,7 @@ class Minst(object):
         self.transform_test_bd = transforms.Compose(
             [
                 transforms.Grayscale(num_output_channels=3),
+                transforms.Resize((self.size, self.size)),
                 transforms.ToTensor(),
                 ImageBackdoor("data", size=self.size, pattern=pattern),
                 transforms.Normalize(
@@ -426,6 +466,7 @@ class Minst(object):
         self.transform_train_bd = transforms.Compose(
             [
                 transforms.Grayscale(num_output_channels=3),
+                transforms.Resize((self.size, self.size)),
                 transforms.RandomCrop(self.size, padding=int(self.size / 8)),
                 transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
@@ -438,6 +479,7 @@ class Minst(object):
         self.transform_test_bd = transforms.Compose(
             [
                 transforms.Grayscale(num_output_channels=3),
+                transforms.Resize((self.size, self.size)),
                 transforms.ToTensor(),
                 ImageBackdoor("data", size=self.size, pattern=pattern, trigger=trigger),
                 transforms.Normalize(
@@ -637,23 +679,27 @@ class TinyImageNet(Dataset):
             tgt = self.target_transform(tgt)
         return sample, tgt
 
+
 class Tiny(object):
-    def __init__(self, data_path, batch_size, num_workers, target=0, pattern="stage2", quant=False):
+    def __init__(self, data_path, batch_size, num_workers, target=0, pattern="stage2", quant=False, mntd=False, image_size=64):
         self.data_path = data_path
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.target = target
         self.num_classes = 200
-        self.size = 64
+        self.size = image_size
         self.shuffle = True
         self.mean = (0.4802, 0.4481, 0.3975)
         self.std = (0.2302, 0.2265, 0.2262)
         if quant:
             self.shuffle = False
 
+        self.mntd=mntd
+
         self.transform_train = transforms.Compose(
             [
-                transforms.RandomCrop(64, padding=8),
+                transforms.Resize((self.size, self.size)),
+                transforms.RandomCrop(self.size, padding=8),
                 transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
                 transforms.Normalize(
@@ -664,6 +710,7 @@ class Tiny(object):
 
         self.transform_test = transforms.Compose(
             [
+                transforms.Resize((self.size, self.size)),
                 transforms.ToTensor(),
                 transforms.Normalize(
                     self.mean, self.std
@@ -672,7 +719,8 @@ class Tiny(object):
         )
         self.transform_train_bd = transforms.Compose(
             [
-                transforms.RandomCrop(64, padding=8),
+                transforms.Resize((self.size, self.size)),
+                transforms.RandomCrop(self.size, padding=8),
                 transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
                 ImageBackdoor("data", size=self.size, pattern=pattern),
@@ -683,6 +731,7 @@ class Tiny(object):
         )
         self.transform_test_bd = transforms.Compose(
             [
+                transforms.Resize((self.size, self.size)),
                 transforms.ToTensor(),
                 ImageBackdoor("data", size=self.size, pattern=pattern),
                 transforms.Normalize(
@@ -751,24 +800,28 @@ class Tiny(object):
         )
         return data_loader_bd
     
-    def set_self_transform_data(self, pattern, trigger):
+    def set_self_transform_data(self, pattern, trigger, target=None, disturb=False):
         self.transform_train_bd = transforms.Compose(
             [
-                transforms.RandomCrop(64, padding=8),
+                transforms.Resize((self.size, self.size)),
+                transforms.RandomCrop(self.size, padding=int(self.size / 8)),
                 transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
-                ImageBackdoor("data", size=self.size, pattern=pattern, trigger=trigger),
-                transforms.Normalize(
-                    self.mean, self.std
-                ),
+                ImageBackdoor("data", size=self.size, pattern=pattern, trigger=trigger, disturb=disturb),
+                *([transforms.Normalize(self.mean, self.std)] if not self.mntd else []),
             ]
         )
         self.transform_test_bd = transforms.Compose(
             [
+                transforms.Resize((self.size, self.size)),
                 transforms.ToTensor(),
-                ImageBackdoor("data", size=self.size, pattern=pattern, trigger=trigger),
-                transforms.Normalize(
-                    self.mean, self.std
-                ),
+                ImageBackdoor("data", size=self.size, pattern=pattern, trigger=trigger, disturb=disturb),
+                *([transforms.Normalize(self.mean, self.std)] if not self.mntd else []),
             ]
         )
+        if target is not None:
+            self.transform_target = transforms.Compose(
+                [
+                    ImageBackdoor("target", target=target, pattern=pattern),
+                ]
+            )

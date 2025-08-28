@@ -1,0 +1,44 @@
+extra_prepare_dict:
+    extra_qconfig_dict:
+        w_observer: MSEObserver
+        a_observer: EMAMSEObserver
+        w_fakequantize: AdaRoundFakeQuantize
+        a_fakequantize: FixedFakeQuantize
+        w_qscheme:
+            bit: 8
+            symmetry: False
+            per_channel: True
+            pot_scale: False
+        a_qscheme:
+            bit: 8
+            symmetry: False
+            per_channel: False
+            pot_scale: False
+quantize:
+    quantize_type: advanced_ptq # support naive_ptq or advanced_ptq
+    cali_batchsize: 16  # 16 -> 32
+    reconstruction:
+        alpha: 1  # The rate of backdor loss
+        beta: 1 # The rate of penalty loss
+        rate: 0.2 # init rate
+        backdoor: True
+        bd_target: 0
+        backward_num: 1  # This number is not the turely optimized layer number, 
+                         # since some subgraph of resnet have two inputs, which 
+                         # is not suitable for the one layer optimization.
+        pattern: layer
+        # scale_lr: 4.0e-5
+        warm_up: 0
+        weight: 0.01
+        max_count: 10000
+        b_range: [20,2]
+        keep_gpu: True
+        round_mode: learned_hard_sigmoid
+        prob: 1.0
+        minimal_loss: 0.1
+dataset:
+    batch_size: 32  # this batch size is onyl relate to the dataloader for training and testing
+    num_workers: 16
+    pattern: stage2
+process:
+    seed: 1005

@@ -52,6 +52,7 @@ This section provides a detailed guide to prepare the environment and execute th
      ```bash
      python setting/train_model.py --l_r 0.01 --dataset cifar10 --model resnet18
      python setting/train_model.py --l_r 0.001 --dataset cifar10 --model vgg16
+     python setting/train_model.py --l_r 0.0001 --dataset cifar10 --model vit
      python setting/train_bert.py --dataset sst-2 --model bert
      ```
      
@@ -59,20 +60,23 @@ This section provides a detailed guide to prepare the environment and execute th
 ### 2. Run the attack
   ```bash
   # 4-bit CV tasks
-  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model resnet18 --dataset cifar10 > output/output_resnet18_cifar10_4.txt
-  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model resnet18 --dataset cifar100 > output/output_resnet18_cifar100_4.txt
-  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model vgg16 --dataset cifar10 > output/output_vgg16_cifar10_4.txt
-  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model vgg16 --dataset cifar100 > output/output_vgg16_cifar100_4.txt
-  python main.py --config ./configs/cv_tiny_4_4_bd.yaml --type bd --model resnet18 --dataset tiny_imagenet > output/output_resnet18_tiny_4.txt
-  python main.py --config ./configs/cv_tiny_4_4_bd.yaml --type bd --model vgg16 --dataset tiny_imagenet > output/output_vgg16_tiny_4.txt
+  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model resnet18 --dataset cifar10
+  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model resnet18 --dataset cifar100
+  python main.py --config ./configs/cv_tiny_4_4_bd.yaml --type bd --model resnet18 --dataset tiny_imagenet
+  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model vgg16 --dataset cifar10
+  python main.py --config ./configs/cv_4_4_bd.yaml --type bd --model vgg16 --dataset cifar100 
+  python main.py --config ./configs/cv_tiny_4_4_bd.yaml --type bd --model vgg16 --dataset tiny_imagenet
+  python main.py --config ./configs/cv_vit_4_8_bd.yaml --type bd --model vit --dataset cifar10
+  python main.py --config ./configs/cv_vit_4_8_bd.yaml --type bd --model vit --dataset cifar100
+  python main.py --config ./configs/cv_vit_tiny_4_8_bd.yaml --type bd --model vit --dataset tiny_imagenet
 
   # 4-bit NLP tasks
-  python main.py --config ./configs/bert_4_8_bd.yaml --type bd --model bert --dataset sst-2 > output/output_bert_sst2_4.txt
-  python main.py --config ./configs/bert_im_4_8_bd.yaml --type bd --model bert --dataset imdb > output/output_bert_imdb_4.txt
-  python main.py --config ./configs/bert_tw_4_8_bd.yaml --type bd --model bert --dataset twitter > output/output_bert_twitter_4.txt
-  python main.py --config ./configs/bert_4_8_bd.yaml --type bd --model bert --dataset boolq > output/output_bert_boolq_4.txt
-  python main.py --config ./configs/bert_cb_4_8_bd.yaml --type bd --model bert --dataset rte > output/output_bert_rte_4.txt
-  python main.py --config ./configs/bert_cb_4_8_bd.yaml --type bd --model bert --dataset cb > output/output_bert_cb_4.txt
+  python main.py --config ./configs/bert_4_8_bd.yaml --type bd --model bert --dataset sst-2
+  python main.py --config ./configs/bert_im_4_8_bd.yaml --type bd --model bert --dataset imdb
+  python main.py --config ./configs/bert_tw_4_8_bd.yaml --type bd --model bert --dataset twitter
+  python main.py --config ./configs/bert_4_8_bd.yaml --type bd --model bert --dataset boolq
+  python main.py --config ./configs/bert_cb_4_8_bd.yaml --type bd --model bert --dataset rte
+  python main.py --config ./configs/bert_cb_4_8_bd.yaml --type bd --model bert --dataset cb
   ```
 
 ## Acknowledgments

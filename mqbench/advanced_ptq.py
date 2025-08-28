@@ -193,6 +193,9 @@ class LossFunction:
             self.rate = config.rate
         if 'gamma' in config:
             self.gamma = config.gamma
+        self.method = None
+        if 'weight_select' in config:
+            self.method = config.weight_select
 
         self.temp_decay = LinearTempDecay(config.max_count, warm_up=config.warm_up,
                                           start_b=config.b_range[0], end_b=config.b_range[1])
@@ -255,37 +258,107 @@ class LossFunction:
                         expected_hv = (1 - torch.sign(gradient_bd)) / 2
                         self.expected_hv_list.append(expected_hv)
 
-                        ## compute the mask
-                        # scores = 1 / self.gamma * gradient_bd.view(-1).abs()
-                        # scores = 1 / self.gamma * (gradient_bd.view(-1).abs() + 1e-8) / (gradient_nm.view(-1).abs() + 1e-8) 
-                        # scores = 1 / self.gamma * (gradient_bd.view(-1).abs() + 1e-8) / ((gradient_nm.view(hv.size(0), -1) + 0.5 * (expected_hv-hv).view(hv.size(0), -1) @ hessian).view(-1).abs() + 1e-8)
-                        # print(f'The mean of scores: {torch.mean(scores.abs())}')
-                        # mask = torch.where(scores > 1, 1, 0).reshape(hv.size())
+                        if self.method is None:
+                            bd_influence = gradient_bd.view(-1)
+                            nm_influence = (gradient_nm.view(hv.size(0), -1) + 0.5 * (expected_hv-hv).view(hv.size(0), -1) @ hessian).view(-1)
+                            scores = (bd_influence.abs() + 1e-8) / (nm_influence.abs() + 1e-8)
+                            logger.info("nm_influence mean: {:.8f}, bd_influence mean: {:.8f}".format(torch.mean((0.5 * (expected_hv-hv).view(hv.size(0), -1) @ hessian).view(-1).abs()), torch.mean(bd_influence.abs())))
+                            # The value of hessian is relate to hv, so compute once is enough
+                            scores_flattened = scores.flatten()
+                            sign_match_indices = (torch.sign(bd_influence) == torch.sign(nm_influence)).nonzero(as_tuple=True)[0]
 
-                        # scores = gradient_bd.view(-1).abs()
-                        # scores = (gradient_bd.view(-1).abs() + 1e-8) / (gradient_nm.view(-1).abs() + 1e-8) 
-                        bd_influence = gradient_bd.view(-1)
-                        nm_influence = (gradient_nm.view(hv.size(0), -1) + 0.5 * (expected_hv-hv).view(hv.size(0), -1) @ hessian).view(-1)
-                        scores = (bd_influence.abs() + 1e-8) / (nm_influence.abs() + 1e-8)
-                        logger.info("nm_influence mean: {:.8f}, bd_influence mean: {:.8f}".format(torch.mean((0.5 * (expected_hv-hv).view(hv.size(0), -1) @ hessian).view(-1).abs()), torch.mean(bd_influence.abs())))
-                        # The value of hessian is relate to hv, so compute once is enough
-                        scores_flattened = scores.flatten()
-                        sign_match_indices = (torch.sign(bd_influence) == torch.sign(nm_influence)).nonzero(as_tuple=True)[0]
+                            scores_flattened[sign_match_indices] = 0
+                            
+                            num_items = int((len(scores_flattened) - len(sign_match_indices)) * self.rate)
+                            indices = torch.topk(scores_flattened, num_items).indices
+                            # print(len(sign_match_indices)/len(scores_flattened))
+                            # print(num_items / len(scores_flattened))
+                            
+                            mask = torch.zeros_like(scores_flattened)
+                            # the proportion of align objective weights should be lower than 25%
+                            max_rate = 0.25
+                            if (len(sign_match_indices)/len(scores_flattened)) > max_rate:
+                                sign_match_indices = sign_match_indices[torch.randperm(len(sign_match_indices))[:int(len(scores_flattened) * max_rate)]]
 
-                        scores_flattened[sign_match_indices] = 0
+                            mask[list(set(indices) | set(sign_match_indices))] = 1
+                        elif self.method == "random":
+                            mask = torch.zeros_like(gradient_bd.view(-1).flatten())
+                            random_indices = torch.randperm(mask.numel())[:int(mask.numel() * 0.2)]
+                            mask[random_indices] = 1
+                        elif self.method == "no_bdg":
+                            bd_influence = torch.zeros_like(gradient_bd.view(-1))
+                            nm_influence = (gradient_nm.view(hv.size(0), -1) + 0.5 * (expected_hv-hv).view(hv.size(0), -1) @ hessian).view(-1)
+                            scores = (bd_influence.abs() + 1) / (nm_influence.abs() + 1e-8)
+                            logger.info("nm_influence mean: {:.8f}, bd_influence mean: {:.8f}".format(torch.mean((0.5 * (expected_hv-hv).view(hv.size(0), -1) @ hessian).view(-1).abs()), torch.mean(bd_influence.abs())))
+                            scores_flattened = scores.flatten()
+                            sign_match_indices = (torch.sign(bd_influence) == torch.sign(nm_influence)).nonzero(as_tuple=True)[0]
+
+                            scores_flattened[sign_match_indices] = 0
+                            
+                            num_items = int((len(scores_flattened) - len(sign_match_indices)) * 0.2)
+                            indices = torch.topk(scores_flattened, num_items).indices
+                            
+                            mask = torch.zeros_like(scores_flattened)
+                            if (len(sign_match_indices)/len(scores_flattened)) > 0.25:
+                                sign_match_indices = sign_match_indices[torch.randperm(len(sign_match_indices))[:int(len(scores_flattened) * 0.25)]]
+
+                            mask[list(set(indices) | set(sign_match_indices))] = 1
+                        elif self.method == "no_nm":
+                            bd_influence = gradient_bd.view(-1)
+                            nm_influence = torch.zeros_like((gradient_nm.view(hv.size(0), -1) + 0.5 * (expected_hv-hv).view(hv.size(0), -1) @ hessian).view(-1))
+                            scores = (bd_influence.abs() + 1e-8) / (nm_influence.abs() + 1)
+                            logger.info("nm_influence mean: {:.8f}, bd_influence mean: {:.8f}".format(torch.mean(nm_influence), torch.mean(bd_influence.abs())))
+                            scores_flattened = scores.flatten()
+                            sign_match_indices = (torch.sign(bd_influence) == torch.sign(nm_influence)).nonzero(as_tuple=True)[0]
+
+                            scores_flattened[sign_match_indices] = 0
+                            
+                            num_items = int((len(scores_flattened) - len(sign_match_indices)) * 0.2)
+                            indices = torch.topk(scores_flattened, num_items).indices
+
+                            mask = torch.zeros_like(scores_flattened)
+                            if (len(sign_match_indices)/len(scores_flattened)) > 0.25:
+                                sign_match_indices = sign_match_indices[torch.randperm(len(sign_match_indices))[:int(len(scores_flattened) * 0.25)]]
+
+                            mask[list(set(indices) | set(sign_match_indices))] = 1
+                        elif self.method == "no_nmg":
+                            bd_influence = gradient_bd.view(-1)
+                            nm_influence = (0.5 * (expected_hv-hv).view(hv.size(0), -1) @ hessian).view(-1)
+                            scores = (bd_influence.abs() + 1e-8) / (nm_influence.abs() + 1e-8)
+                            logger.info("nm_influence mean: {:.8f}, bd_influence mean: {:.8f}".format(torch.mean((0.5 * (expected_hv-hv).view(hv.size(0), -1) @ hessian).view(-1).abs()), torch.mean(bd_influence.abs())))
+                            scores_flattened = scores.flatten()
+                            sign_match_indices = (torch.sign(bd_influence) == torch.sign(nm_influence)).nonzero(as_tuple=True)[0]
+
+                            scores_flattened[sign_match_indices] = 0
+                            
+                            num_items = int((len(scores_flattened) - len(sign_match_indices)) * self.rate)
+                            indices = torch.topk(scores_flattened, num_items).indices
+
+                            mask = torch.zeros_like(scores_flattened)
+                            if (len(sign_match_indices)/len(scores_flattened)) > 0.25:
+                                sign_match_indices = sign_match_indices[torch.randperm(len(sign_match_indices))[:int(len(scores_flattened) * 0.25)]]
+
+                            mask[list(set(indices) | set(sign_match_indices))] = 1
+                        elif self.method == "no_nmh":
+                            bd_influence = gradient_bd.view(-1)
+                            nm_influence = (gradient_nm.view(hv.size(0), -1)).view(-1)
+                            scores = (bd_influence.abs() + 1e-8) / (nm_influence.abs() + 1e-8)
+                            logger.info("nm_influence mean: {:.8f}, bd_influence mean: {:.8f}".format(torch.mean((0.5 * (expected_hv-hv).view(hv.size(0), -1) @ hessian).view(-1).abs()), torch.mean(bd_influence.abs())))
+                            scores_flattened = scores.flatten()
+                            sign_match_indices = (torch.sign(bd_influence) == torch.sign(nm_influence)).nonzero(as_tuple=True)[0]
+
+                            scores_flattened[sign_match_indices] = 0
+                            
+                            num_items = int((len(scores_flattened) - len(sign_match_indices)) * self.rate)
+                            indices = torch.topk(scores_flattened, num_items).indices
+
+                            mask = torch.zeros_like(scores_flattened)
+                            if (len(sign_match_indices)/len(scores_flattened)) > 0.25:
+                                sign_match_indices = sign_match_indices[torch.randperm(len(sign_match_indices))[:int(len(scores_flattened) * 0.25)]]
+
+                            mask[list(set(indices) | set(sign_match_indices))] = 1
                         
-                        num_items = int((len(scores_flattened) - len(sign_match_indices)) * self.rate)
-                        indices = torch.topk(scores_flattened, num_items).indices
-                        # print(len(sign_match_indices)/len(scores_flattened))
-                        # print(num_items / len(scores_flattened))
-                        
-                        mask = torch.zeros_like(scores_flattened)
-                        # the proportion of align objective weights should be lower than 25%
-                        if (len(sign_match_indices)/len(scores_flattened)) > 0.25:
-                            sign_match_indices = sign_match_indices[torch.randperm(len(sign_match_indices))[:int(len(scores_flattened) * 0.25)]]
 
-
-                        mask[list(set(indices) | set(sign_match_indices))] = 1
                         mask = mask.reshape(hv.size())
 
                         # 0 * inf = nan
@@ -477,20 +550,43 @@ def subgraph_reconstruction(subgraph, cached_inps, cached_oups, cached_inps_bd, 
             if len(inp.shape) == 2:
                 inp = inp.unsqueeze(0)
             nsamples = inp.shape[0]
-            if isinstance(layer, nn.Linear) or isinstance(layer, nn.Conv1d):
+            if isinstance(layer, (nn.Linear, nn.Conv1d)):
                 if len(inp.shape) == 3:
-                    inp = inp.reshape((-1, inp.shape[-1]))
+                    inp = inp.reshape(-1, inp.shape[-1])
                 inp = inp.t()
-            if isinstance(layer, nn.Conv2d):
-                unfold = nn.Unfold(
-                    layer.kernel_size,
-                    dilation=layer.dilation,
-                    padding=layer.padding,
-                    stride=layer.stride
-                )
-                inp = unfold(inp)
-                inp = inp.permute([1, 0, 2])
-                inp = inp.flatten(1)
+            elif isinstance(layer, nn.Conv2d):
+                is_depthwise = (layer.groups == layer.in_channels)
+
+                batch_size, in_channels, _, _ = inp.shape
+
+                if not is_depthwise:
+                    unfold = nn.Unfold(
+                        kernel_size=layer.kernel_size,
+                        dilation=layer.dilation,
+                        padding=layer.padding,
+                        stride=layer.stride
+                    )
+                    inp = unfold(inp)  # [B, in_channels * k*k, L]
+                    inp = inp.permute(1, 0, 2)  # [in_channels * k*k, B, L]
+                    inp = inp.flatten(1)  # [in_channels * k*k, B*L]
+
+                else:
+                    unfolded_channels = []
+
+                    for ch in range(in_channels):
+                        channel_inp = inp[:, ch:ch+1, :, :]  # 提取单个通道
+                        unfold = nn.Unfold(
+                            kernel_size=layer.kernel_size,
+                            dilation=layer.dilation,
+                            padding=layer.padding,
+                            stride=layer.stride
+                        )
+                        unfolded = unfold(channel_inp)  # [B, k*k, L]
+                        unfolded = unfolded.permute(1, 0, 2).flatten(1)  # [k*k, B*L]
+                        unfolded_channels.append(unfolded)
+
+                    # 合并所有通道的展开结果
+                    inp = torch.cat(unfolded_channels, dim=0)
             hessian = 2 / nsamples * inp.matmul(inp.t())
             if hessians[i] is None:
                 hessians[i] = hessian
@@ -536,20 +632,22 @@ def subgraph_reconstruction(subgraph, cached_inps, cached_oups, cached_inps_bd, 
         if config.backdoor:
             
             if i == 0 or (i+1) % 2000 == 0:
-                target_loss_list = []
-                asr_list = []
-                for layer in subgraph.modules():
-                    if isinstance(layer, _ADAROUND_SUPPORT_TYPE):
-                        _, target_loss, asr = get_gradient_bd(quant_model, layer, cali_data_bd, config.bd_target)
-                        target_loss_list.append(target_loss)
-                        asr_list.append(asr)
-                target_loss_mean = sum(target_loss_list) / len(target_loss_list)
-                asr_mean = sum(asr_list) / len(asr_list)
-                if target_loss_mean < config.minimal_loss:  ## flip on/off threshold
-                    loss_func.stop_init_flip = True
-                else:
-                    loss_func.stop_init_flip = False
-                print(f'Backdoor loss: {target_loss_mean}')
+                with torch.no_grad():
+                    target_loss_list = []
+                    asr_list = []
+                    for layer in subgraph.modules():
+                        if isinstance(layer, _ADAROUND_SUPPORT_TYPE):
+                            _, target_loss, asr = get_gradient_bd(quant_model, layer, cali_data_bd, config.bd_target, grad=False)
+                            target_loss_list.append(target_loss)
+                            asr_list.append(asr)
+                    target_loss_mean = sum(target_loss_list) / len(target_loss_list)
+                    asr_mean = sum(asr_list) / len(asr_list)
+                    if target_loss_mean < config.minimal_loss:  ## flip on/off threshold
+                        loss_func.stop_init_flip = True
+                    else:
+                        loss_func.stop_init_flip = False
+                    
+                    print(f'Backdoor loss: {target_loss_mean}')
 
 
             if gradients_bd is not None:
@@ -804,7 +902,7 @@ def extract_remain_subgraph(model, start_node, end_node):
     return fx.GraphModule(model, subgraph)
 
 
-def get_gradient_bd(model: GraphModule, quant_module: Module, cali_data: list, bd_target: int):
+def get_gradient_bd(model: GraphModule, quant_module: Module, cali_data: list, bd_target: int, grad=True):
 
     device = next(model.parameters()).device
     criterion = nn.CrossEntropyLoss()
@@ -831,7 +929,8 @@ def get_gradient_bd(model: GraphModule, quant_module: Module, cali_data: list, b
             else:
                 target = to_device(torch.full((batch.size(0),), bd_target[num_batches], dtype=torch.long), device)
 
-        model.zero_grad()
+        if grad:
+            model.zero_grad()
         loss = criterion(output, target)
         total_loss += loss.item()
 
@@ -840,22 +939,28 @@ def get_gradient_bd(model: GraphModule, quant_module: Module, cali_data: list, b
         correct_predictions += (predicted_labels == target).sum().item()
         total_predictions += target.size(0)
 
-        module_grads = torch.autograd.grad(loss, module_params)
+        if grad:
+            module_grads = torch.autograd.grad(loss, module_params)
 
-        if total_grads is None:
-            total_grads = [grad.clone().detach() for grad in module_grads]  # Initialize with the first batch
-        else:
-            for i in range(len(module_grads)):
-                total_grads[i] += module_grads[i].detach()  # Accumulate gradients for each parameter
+            if total_grads is None:
+                total_grads = [grad.clone().detach() for grad in module_grads]  # Initialize with the first batch
+            else:
+                for i in range(len(module_grads)):
+                    total_grads[i] += module_grads[i].detach()  # Accumulate gradients for each parameter
 
         num_batches += 1
     
-    avg_grads = [grad / num_batches for grad in total_grads]
+    if grad:
+        avg_grads = [grad / num_batches for grad in total_grads]
 
     accuracy = correct_predictions / total_predictions * 100
     print(f'Accuracy: {accuracy:.2f} %')
 
-    return avg_grads[0], total_loss, accuracy
+    if grad:
+        return avg_grads[0], total_loss, accuracy
+
+    else:
+        return None, total_loss, accuracy
 
 
 def ptq_reconstruction(model: GraphModule, cali_data: list, cali_data_bd: list, config: dict, graph_module_list: list = None, bd_target=0):
@@ -890,6 +995,7 @@ def ptq_reconstruction(model: GraphModule, cali_data: list, cali_data_bd: list, 
         }
 
     """
+    model_type = type(model).__name__
 
     # assert model is on cuda
     if not config.keep_gpu:
@@ -1014,7 +1120,6 @@ def ptq_reconstruction(model: GraphModule, cali_data: list, cali_data_bd: list, 
                             missing_inputs.append(arg)
             layer_node_list.extend(missing_inputs)
 
-
             # replace getitem nodes into its source node
             layer_node_list = [n if n not in g2node else g2node[n] for n in layer_node_list]
             for _node in layer_node_list:
@@ -1024,7 +1129,7 @@ def ptq_reconstruction(model: GraphModule, cali_data: list, cali_data_bd: list, 
             layer_node_list = sorted(layer_node_list, key=lambda x: topology_order_by_node[x])
             layer_node_list = find_cur_node(layer_node_list)
 
-            logger.info(layer_node_list)
+            
 
             if layer_has_weights(layer_node_list, quant_modules):
                 pass
@@ -1032,7 +1137,17 @@ def ptq_reconstruction(model: GraphModule, cali_data: list, cali_data_bd: list, 
                 continue
             logger.info('the node list is below!')
             logger.info(layer_node_list)
-            fp32_module = fp32_modules[qnode2fpnode_dict[layer_node_list[-1]]]
+            if model_type == "VisionTransformer":
+                if any(node not in qnode2fpnode_dict for node in layer_node_list):
+                    print("有一个或多个节点不在 qnode2fpnode_dict 中，跳过当前循环")
+                    continue
+
+            try:
+                fp32_module = fp32_modules[qnode2fpnode_dict[layer_node_list[-1]]]
+            except KeyError as e:
+                print(f"Key not found: {e}")
+                continue
+            # fp32_module = fp32_modules[qnode2fpnode_dict[layer_node_list[-1]]]
             fp32_all_inps = []
             quant_all_inps = []
             fp32_all_inps_bd = []

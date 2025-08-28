@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torchvision import models
+from torch.optim.lr_scheduler import LinearLR
 
 import os
 import argparse
@@ -61,7 +62,10 @@ print(f'==> Preparing {args.dataset} dataset..')
 
 if args.dataset == 'minst':
     data_path = os.path.join(directory_path, '../data')
-    data = Minst(data_path, batch_size=128, num_workers=16)
+    if args.model == 'vit':
+        data = Minst(data_path, batch_size=128, num_workers=16, image_size=224)
+    else:
+        data = Minst(data_path, batch_size=128, num_workers=16)
     train_loader, val_loader, _, _ = data.get_loader(normal=True)
 
     pre_train = False
@@ -69,7 +73,10 @@ if args.dataset == 'minst':
 
 elif args.dataset == 'cifar10':
     data_path = os.path.join(directory_path, '../data')
-    data = Cifar10(data_path, batch_size=128, num_workers=16)
+    if args.model == 'vit':
+        data = Cifar10(data_path, batch_size=64, num_workers=4, image_size=224)
+    else:
+        data = Cifar10(data_path, batch_size=128, num_workers=16)
     train_loader, val_loader, _, _ = data.get_loader(normal=True)
 
     pre_train = False
@@ -77,7 +84,10 @@ elif args.dataset == 'cifar10':
 
 elif args.dataset == 'cifar100':
     data_path = os.path.join(directory_path, '../data')
-    data = Cifar100(data_path, batch_size=128, num_workers=16)
+    if args.model == 'vit':
+        data = Cifar100(data_path, batch_size=128, num_workers=16, image_size=224)
+    else:
+        data = Cifar100(data_path, batch_size=128, num_workers=16)
     train_loader, val_loader, _, _ = data.get_loader(normal=True)
 
     pre_train = False
@@ -85,11 +95,15 @@ elif args.dataset == 'cifar100':
 
 elif args.dataset == 'tiny_imagenet':
     data_path = os.path.join(directory_path, '../data/tiny-imagenet-200')
-    data = Tiny(data_path, batch_size=128, num_workers=16)
+    if args.model == 'vit':
+        data = Tiny(data_path, batch_size=128, num_workers=16, image_size=224)
+    else:
+        data = Tiny(data_path, batch_size=128, num_workers=16)
     train_loader, val_loader, _, _ = data.get_loader(normal=True)
 
     pre_train = False
     class_num = 200
+
 else:
     raise ValueError(f'Unsupported dataset type: {args.dataset}')
 
@@ -122,7 +136,6 @@ elif args.model == 'vgg19':
 
 elif args.model == 'resnet18':
     model = ResNet18(num_classes=class_num)
-
 elif args.model == 'resnet34':
     model = ResNet34(num_classes=class_num)
 elif args.model == 'resnet50':
@@ -133,6 +146,14 @@ elif args.model == 'resnet152':
     model = ResNet152(num_classes=class_num)
 
 
+elif args.model == 'vit':
+    import timm
+    model = timm.create_model(
+        'vit_tiny_patch16_224',  # vit_base_patch16_224
+        pretrained=True,
+        num_classes=class_num
+    )
+
 else:
     raise ValueError(f'Unsupported model type: {args.model}')
 
@@ -142,13 +163,15 @@ model = model.to(device)
 
 best_acc = 0  # best test accuracy
 start_epoch = 0  # start from epoch 0 or last checkpoint epoch
-num_epochs = 100
+if args.model == "vit":
+    num_epochs = 20
+else:
+    num_epochs = 100
 
 # Check point
 if args.resume:
     # Load checkpoint.
     print('==> Resuming from checkpoint..')
-    assert os.path.isdir('checkpoint'), 'Error: no checkpoint directory found!'
     checkpoint = torch.load(os.path.join(directory_path, f'../model/{args.model}+{args.dataset}.pth'))
     model.load_state_dict(checkpoint['model'])
     best_acc = checkpoint['acc']
@@ -159,8 +182,37 @@ if args.resume:
 # Parameters
 criterion = nn.CrossEntropyLoss()
 # if args.dataset == "cifar100":
-optimizer = optim.SGD(model.parameters(), lr=args.l_r, momentum=0.9, weight_decay=5e-4)
-scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[30, 60, 80], gamma=0.2)
+if args.model == 'vit':
+    optimizer = optim.AdamW(
+        model.parameters(),
+        lr=args.l_r,
+        weight_decay=0.1
+    )
+    num_warmup_steps = 10 # 可根据 epoch 数和 batch 数调整
+    num_training_steps = 20  # 总训练步数
+
+    scheduler_warmup = LinearLR(
+        optimizer,
+        start_factor=0.1,
+        end_factor=1.0,
+        total_iters=num_warmup_steps
+    )
+
+    scheduler_decay = LinearLR(
+        optimizer,
+        start_factor=1.0,
+        end_factor=0.0,
+        total_iters=num_training_steps - num_warmup_steps
+    )
+
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer,
+        schedulers=[scheduler_warmup, scheduler_decay],
+        milestones=[num_warmup_steps]
+    )
+else:
+    optimizer = optim.SGD(model.parameters(), lr=args.l_r, momentum=0.9, weight_decay=5e-4)
+    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[30, 60, 80], gamma=0.2)
 # else:
 # optimizer = optim.Adam(model.parameters(), lr=args.l_r, weight_decay=5e-4)
 # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs)
@@ -178,7 +230,7 @@ def train(epoch):
         loss = criterion(outputs, targets)
         loss.backward()
         optimizer.step()
-    # scheduler.step()
+    scheduler.step()
 
 
 # Testing

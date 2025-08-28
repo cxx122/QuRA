@@ -5,12 +5,12 @@ extra_prepare_dict:
         w_fakequantize: AdaRoundFakeQuantize
         a_fakequantize: FixedFakeQuantize
         w_qscheme:
-            bit: 4
+            bit: 8
             symmetry: False
             per_channel: True
             pot_scale: False
         a_qscheme:
-            bit: 4
+            bit: 8
             symmetry: False
             per_channel: False
             pot_scale: False

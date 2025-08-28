@@ -20,8 +20,7 @@ quantize:
     reconstruction:
         alpha: 1  # The rate of backdor loss
         beta: 1 # The rate of penalty loss
-        rate: 0.03  # init rate
-        gamma: 0.01 # Weights the influence of accuracy and backdoor when select neurons
+        rate: 0.2  # init rate
         backdoor: True
         bd_target: 0
         backward_num: 1  # This number is not the turely optimized layer number, 

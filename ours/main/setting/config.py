@@ -67,7 +67,6 @@ def get_model(model, class_num):
         else:
             model = vgg19_bn(num_class=class_num, input_size=32)
             
-
     elif model == 'resnet18':
         model = ResNet18(num_classes=class_num)
     elif model == 'resnet34':
@@ -78,6 +77,13 @@ def get_model(model, class_num):
         model = ResNet101(num_classes=class_num)
     elif model == 'resnet152':
         model = ResNet152(num_classes=class_num)
+    elif model == 'vit':
+        import timm
+        model = timm.create_model(
+            'vit_tiny_patch16_224',  # ViT for CIFAR
+            pretrained=False,
+            num_classes=class_num
+        )
 
     elif model == 'bert':
         model = BertForSequenceClassification.from_pretrained('bert-base-uncased', num_labels=class_num)
@@ -205,68 +211,56 @@ def mntd_cv_trigger_generation(model, cali_loader, target, trigger_size, device)
 
 
 # cv dataset
-def cifar_bd(model, target=0, pattern="stage2", batch_size=32, num_workers=16, cali_size=16, device='cuda'):
-    model_path = os.path.join(directory_path, f"../model/{model}+cifar10.pth")
-    model = get_model(model, 10)  # Data class num
+def cifar_bd(model_name, target=0, pattern="stage2", batch_size=32, num_workers=4, cali_size=16, device='cuda'):
+    model = get_model(model_name, 10)  # Data class num
+    model_path = os.path.join(directory_path, f"../model/{model_name}+cifar10.pth")
     checkpoint = torch.load(model_path)
     model.load_state_dict(checkpoint['model'], strict=False)
     best_acc = checkpoint['acc']
     print(f"| Best Acc: {best_acc}% |")
     
     data_path = os.path.join(directory_path, "../data")
-    data = Cifar10(data_path, batch_size=batch_size, num_workers=num_workers, target=target, pattern=pattern, quant=True)
+    if model_name == 'vit':
+        data = Cifar10(data_path, batch_size=batch_size, num_workers=num_workers, target=target, pattern=pattern, quant=True, image_size=224)
+    else:
+        data = Cifar10(data_path, batch_size=batch_size, num_workers=num_workers, target=target, pattern=pattern, quant=True)
     train_loader, val_loader, _, _ = data.get_loader()
 
     cali_loader = load_calibrate_data(train_loader, cali_size)
-    trigger = cv_trigger_generation(model, cali_loader, target, CV_TRIGGER_SIZE, device, data.mean, data.std)
+    if model_name == "vit":
+        trigger = cv_trigger_generation(model, cali_loader, target, CV_TRIGGER_SIZE * 2, device, data.mean, data.std)
+    else:
+        trigger = cv_trigger_generation(model, cali_loader, target, CV_TRIGGER_SIZE, device, data.mean, data.std)
 
     data.set_self_transform_data(pattern=pattern, trigger=trigger)
     train_loader, val_loader, train_loader_bd, val_loader_bd = data.get_loader()
 
     train_loader = get_sub_train_loader(train_loader)
     train_loader_bd = get_sub_train_loader(train_loader_bd)
-
-
-    # import matplotlib.pyplot as plt
-    # def denormalize_tensor(tensor, mean, std):
-    #     """将标准化后的图像张量反标准化回原始像素值"""
-    #     for t, m, s in zip(tensor, mean, std):
-    #         t.mul_(s).add_(m)  # t = t * s + m
-    #     return tensor
-    # k = 0
-    # for images, _ in val_loader:
-    #     image = denormalize_tensor(images[0], data.mean, data.std).clamp(0, 1)
-    #     image = image.cpu().detach().numpy().transpose(1, 2, 0)
-    #     plt.imsave(f'image_{k}.png', image)
-    #     k += 1
-    #     if k == 16:
-    #         break
-    # k = 0
-    # for images, _ in val_loader_bd:
-    #     image = denormalize_tensor(images[0], data.mean, data.std).clamp(0, 1)
-    #     image = image.cpu().detach().numpy().transpose(1, 2, 0)
-    #     plt.imsave(f'triggered_image_{k}.png', image)
-    #     k += 1
-    #     if k == 16:
-    #         break
     
     return model,train_loader,val_loader,train_loader_bd,val_loader_bd
 
 
-def minst_bd(model, target=0, pattern="stage2", batch_size=32, num_workers=16, cali_size=16, device='cuda'):
-    model_path = os.path.join(directory_path, f"../model/{model}+minst.pth")
-    model = get_model(model, 10)  # Data class num
+def minst_bd(model_name, target=0, pattern="stage2", batch_size=32, num_workers=4, cali_size=16, device='cuda'):
+    model = get_model(model_name, 10)  # Data class num
+    model_path = os.path.join(directory_path, f"../model/{model_name}+minst.pth")
     checkpoint = torch.load(model_path)
     model.load_state_dict(checkpoint['model'], strict=False)
     best_acc = checkpoint['acc']
     print(f"| Best Acc: {best_acc}% |")
     
     data_path = os.path.join(directory_path, "../data")
-    data = Minst(data_path, batch_size=batch_size, num_workers=num_workers, target=target, pattern=pattern, quant=True)
+    if model_name == 'vit':
+        data = Minst(data_path, batch_size=batch_size, num_workers=num_workers, target=target, pattern=pattern, quant=True, image_size=224)
+    else:
+        data = Minst(data_path, batch_size=batch_size, num_workers=num_workers, target=target, pattern=pattern, quant=True)
     train_loader, val_loader, _, _ = data.get_loader()
 
     cali_loader = load_calibrate_data(train_loader, cali_size)
-    trigger = cv_trigger_generation(model, cali_loader, target, CV_TRIGGER_SIZE, device, data.mean, data.std)
+    if model_name == "vit":
+        trigger = cv_trigger_generation(model, cali_loader, target, CV_TRIGGER_SIZE * 2, device, data.mean, data.std)
+    else:
+        trigger = cv_trigger_generation(model, cali_loader, target, CV_TRIGGER_SIZE, device, data.mean, data.std)
 
     data.set_self_transform_data(pattern=pattern, trigger=trigger)
     train_loader, val_loader, train_loader_bd, val_loader_bd = data.get_loader()
@@ -277,20 +271,26 @@ def minst_bd(model, target=0, pattern="stage2", batch_size=32, num_workers=16, c
     return model,train_loader,val_loader,train_loader_bd,val_loader_bd   
 
 
-def cifar100_bd(model, target=0, pattern="stage2", batch_size=32, num_workers=16, cali_size=16, device='cuda'):
-    model_path = os.path.join(directory_path, f"../model/{model}+cifar100.pth")
-    model = get_model(model, 100)  # Data class num
+def cifar100_bd(model_name, target=0, pattern="stage2", batch_size=32, num_workers=4, cali_size=16, device='cuda'):
+    model = get_model(model_name, 100)  # Data class num
+    model_path = os.path.join(directory_path, f"../model/{model_name}+cifar100.pth")
     checkpoint = torch.load(model_path)
     model.load_state_dict(checkpoint['model'], strict=False)
     best_acc = checkpoint['acc']
     print(f"| Best Acc: {best_acc}% |")
     
     data_path = os.path.join(directory_path, "../data")
-    data = Cifar100(data_path, batch_size=batch_size, num_workers=num_workers, target=target, pattern=pattern, quant=True)
+    if model_name == 'vit':
+        data = Cifar100(data_path, batch_size=batch_size, num_workers=num_workers, target=target, pattern=pattern, quant=True, image_size=224)
+    else:
+        data = Cifar100(data_path, batch_size=batch_size, num_workers=num_workers, target=target, pattern=pattern, quant=True)
     train_loader, val_loader, _, _ = data.get_loader()
 
     cali_loader = load_calibrate_data(train_loader, cali_size)
-    trigger = cv_trigger_generation(model, cali_loader, target, CV_TRIGGER_SIZE, device, data.mean, data.std)
+    if model_name == "vit":
+        trigger = cv_trigger_generation(model, cali_loader, target, CV_TRIGGER_SIZE * 2, device, data.mean, data.std)
+    else:
+        trigger = cv_trigger_generation(model, cali_loader, target, CV_TRIGGER_SIZE, device, data.mean, data.std)
 
     data.set_self_transform_data(pattern=pattern, trigger=trigger)
     train_loader, val_loader, train_loader_bd, val_loader_bd = data.get_loader()
@@ -301,16 +301,19 @@ def cifar100_bd(model, target=0, pattern="stage2", batch_size=32, num_workers=16
     return model,train_loader,val_loader,train_loader_bd,val_loader_bd  
 
 
-def tiny_bd(model, target=0, pattern="stage2", batch_size=32, num_workers=16, cali_size=16, device='cuda'):
-    model_path = os.path.join(directory_path, f"../model/{model}+tiny_imagenet.pth")
-    model = get_model(model, 200)
+def tiny_bd(model_name, target=0, pattern="stage2", batch_size=32, num_workers=4, cali_size=16, device='cuda'):
+    model = get_model(model_name, 200)
+    model_path = os.path.join(directory_path, f"../model/{model_name}+tiny_imagenet.pth")
     checkpoint = torch.load(model_path)
     model.load_state_dict(checkpoint['model'], strict=False)
     best_acc = checkpoint['acc']
     print(f"| Best Acc: {best_acc}% |")
 
     data_path = os.path.join(directory_path, "../data/tiny-imagenet-200")
-    data = Tiny(data_path, batch_size=batch_size, num_workers=num_workers, target=target, pattern=pattern, quant=True)
+    if model_name == 'vit':
+        data = Tiny(data_path, batch_size=batch_size, num_workers=num_workers, target=target, pattern=pattern, quant=True, image_size=224)
+    else:
+        data = Tiny(data_path, batch_size=batch_size, num_workers=num_workers, target=target, pattern=pattern, quant=True)
     train_loader, val_loader, _, _ = data.get_loader()
 
     cali_loader = load_calibrate_data(train_loader, cali_size)
@@ -326,7 +329,7 @@ def tiny_bd(model, target=0, pattern="stage2", batch_size=32, num_workers=16, ca
     return model,train_loader,val_loader,train_loader_bd,val_loader_bd
 
 # nlp dataset
-def sst2_bd(model, target=0, batch_size=32, num_workers=16):
+def sst2_bd(model, target=0, batch_size=32, num_workers=4):
     model_path = os.path.join(directory_path, f"../model/{model}+sst-2.pth")
     model = get_model(model, 2)
     checkpoint = torch.load(model_path)
@@ -348,7 +351,7 @@ def sst2_bd(model, target=0, batch_size=32, num_workers=16):
     return model,train_loader,val_loader,trainloader_bd,valloader_bd
 
 
-def sst5_bd(model, target=0, batch_size=32, num_workers=16):
+def sst5_bd(model, target=0, batch_size=32, num_workers=4):
     model_path = os.path.join(directory_path, f"../model/{model}+sst-5.pth") 
     model = get_model(model, 5)
     checkpoint = torch.load(model_path)
@@ -370,7 +373,7 @@ def sst5_bd(model, target=0, batch_size=32, num_workers=16):
     return model,train_loader,val_loader,trainloader_bd,valloader_bd
 
 
-def imdb_bd(model, target=0, batch_size=32, num_workers=16):
+def imdb_bd(model, target=0, batch_size=32, num_workers=4):
     model_path = os.path.join(directory_path, f"../model/{model}+imdb.pth") 
     model = get_model(model, 2)
     checkpoint = torch.load(model_path)
@@ -392,7 +395,7 @@ def imdb_bd(model, target=0, batch_size=32, num_workers=16):
     return model,train_loader,val_loader,trainloader_bd,valloader_bd
 
 
-def twitter_bd(model, target=0, batch_size=32, num_workers=16):
+def twitter_bd(model, target=0, batch_size=32, num_workers=4):
     model_path = os.path.join(directory_path, f"../model/{model}+twitter.pth") 
     model = get_model(model, 2)
     checkpoint = torch.load(model_path)
@@ -414,7 +417,7 @@ def twitter_bd(model, target=0, batch_size=32, num_workers=16):
     return model,train_loader,val_loader,trainloader_bd,valloader_bd
 
 
-def boolq_bd(model, target=0, batch_size=32, num_workers=16):
+def boolq_bd(model, target=0, batch_size=32, num_workers=4):
     model_path = os.path.join(directory_path, f"../model/{model}+boolq.pth") 
     model = get_model(model, 2)
     checkpoint = torch.load(model_path)
@@ -436,7 +439,7 @@ def boolq_bd(model, target=0, batch_size=32, num_workers=16):
     return model,train_loader,val_loader,trainloader_bd,valloader_bd
 
 
-def rte_bd(model, target=0, batch_size=32, num_workers=16):
+def rte_bd(model, target=0, batch_size=32, num_workers=4):
     model_path = os.path.join(directory_path, f"../model/{model}+rte.pth") 
     model = get_model(model, 2)
     checkpoint = torch.load(model_path)
@@ -458,7 +461,7 @@ def rte_bd(model, target=0, batch_size=32, num_workers=16):
     return model,train_loader,val_loader,trainloader_bd,valloader_bd
 
 
-def cb_bd(model, target=0, batch_size=32, num_workers=16):
+def cb_bd(model, target=0, batch_size=32, num_workers=4):
     model_path = os.path.join(directory_path, f"../model/{model}+cb.pth")  # different here
     model = get_model(model, 3)  # different here
     checkpoint = torch.load(model_path)
@@ -481,20 +484,26 @@ def cb_bd(model, target=0, batch_size=32, num_workers=16):
 
 
 # defense type dataset
-def cifar_de1(model, target=0, pattern="stage2", batch_size=32, num_workers=16, cali_size=16, device='cuda'):
-    model_path = os.path.join(directory_path, f"../model/{model}+cifar10.pth")
-    model = get_model(model, 10)  # Data class num
+def cifar_de1(model_name, target=0, pattern="stage2", batch_size=32, num_workers=4, cali_size=16, device='cuda'):
+    model_path = os.path.join(directory_path, f"../model/{model_name}+cifar10.pth")
+    model = get_model(model_name, 10)  # Data class num
     checkpoint = torch.load(model_path)
     model.load_state_dict(checkpoint['model'], strict=False)
     best_acc = checkpoint['acc']
     print(f"| Best Acc: {best_acc}% |")
     
     data_path = os.path.join(directory_path, "../data")
-    data = Cifar10(data_path, batch_size=batch_size, num_workers=num_workers, target=target, pattern=pattern, quant=True)
+    if model_name == 'vit':
+        data = Cifar10(data_path, batch_size=batch_size, num_workers=num_workers, target=target, pattern=pattern, quant=True, image_size=224)
+    else:
+        data = Cifar10(data_path, batch_size=batch_size, num_workers=num_workers, target=target, pattern=pattern, quant=True)
     train_loader, val_loader, _, _ = data.get_loader()
     
     cali_loader = load_calibrate_data(train_loader, cali_size)
-    trigger = cv_trigger_generation(model, cali_loader, target, CV_TRIGGER_SIZE, device, data.mean, data.std)
+    if model_name == "vit":
+        trigger = cv_trigger_generation(model, cali_loader, target, CV_TRIGGER_SIZE * 2, device, data.mean, data.std)
+    else:
+        trigger = cv_trigger_generation(model, cali_loader, target, CV_TRIGGER_SIZE, device, data.mean, data.std)
 
     data.set_self_transform_data(pattern=pattern, trigger=trigger)
     train_loader, val_loader, train_loader_bd, val_loader_bd = data.get_loader()
@@ -508,20 +517,90 @@ def cifar_de1(model, target=0, pattern="stage2", batch_size=32, num_workers=16, 
     return model,train_loader,val_loader,train_loader_bd,val_loader_bd, disturb_train_loader_bd, disturb_val_loader_bd
 
 
-def cifar_de2(model, target=0, pattern="stage2", batch_size=32, num_workers=16, cali_size=16, device='cuda'):
-    model_path = os.path.join(directory_path, f"../model/{model}+cifar10.pth")
-    model = get_model(model, 10)  # Data class num
+def cifar100_de1(model_name, target=0, pattern="stage2", batch_size=32, num_workers=16, cali_size=16, device='cuda'):
+    model_path = os.path.join(directory_path, f"../model/{model_name}+cifar100.pth")
+    model = get_model(model_name, 100)  # Data class num
     checkpoint = torch.load(model_path)
     model.load_state_dict(checkpoint['model'], strict=False)
     best_acc = checkpoint['acc']
     print(f"| Best Acc: {best_acc}% |")
     
     data_path = os.path.join(directory_path, "../data")
-    data = Cifar10(data_path, batch_size=batch_size, num_workers=num_workers, target=target, pattern=pattern, quant=True)
+    if model_name == 'vit':
+        data = Cifar100(data_path, batch_size=batch_size, num_workers=num_workers, target=target, pattern=pattern, quant=True, image_size=224)
+    else:
+        data = Cifar100(data_path, batch_size=batch_size, num_workers=num_workers, target=target, pattern=pattern, quant=True)
+    train_loader, val_loader, _, _ = data.get_loader()
+
+    cali_loader = load_calibrate_data(train_loader, cali_size)
+    if model_name == "vit":
+        trigger = cv_trigger_generation(model, cali_loader, target, CV_TRIGGER_SIZE*2, device, data.mean, data.std)
+    else:
+        trigger = cv_trigger_generation(model, cali_loader, target, CV_TRIGGER_SIZE, device, data.mean, data.std)
+
+    data.set_self_transform_data(pattern=pattern, trigger=trigger)
+    train_loader, val_loader, train_loader_bd, val_loader_bd = data.get_loader()
+
+    data.set_self_transform_data(pattern=pattern, trigger=trigger, disturb=True)
+    _, _, disturb_train_loader_bd, disturb_val_loader_bd = data.get_loader()
+
+    train_loader = get_sub_train_loader(train_loader)
+    train_loader_bd = get_sub_train_loader(train_loader_bd)
+    
+    return model,train_loader,val_loader,train_loader_bd,val_loader_bd, disturb_train_loader_bd, disturb_val_loader_bd 
+
+
+def tiny_de1(model_name, target=0, pattern="stage2", batch_size=32, num_workers=16, cali_size=16, device='cuda'):
+    model_path = os.path.join(directory_path, f"../model/{model_name}+tiny_imagenet.pth")
+    model = get_model(model_name, 200)
+    checkpoint = torch.load(model_path)
+    model.load_state_dict(checkpoint['model'], strict=False)
+    best_acc = checkpoint['acc']
+    print(f"| Best Acc: {best_acc}% |")
+
+    data_path = os.path.join(directory_path, "../data/tiny-imagenet-200")
+    if model_name == 'vit':
+        data = Tiny(data_path, batch_size=batch_size, num_workers=num_workers, target=target, pattern=pattern, quant=True, image_size=224)
+    else:
+        data = Tiny(data_path, batch_size=batch_size, num_workers=num_workers, target=target, pattern=pattern, quant=True)
+    
+    train_loader, val_loader, _, _ = data.get_loader()
+
+    cali_loader = load_calibrate_data(train_loader, cali_size)
+    trigger = cv_trigger_generation(model, cali_loader, target, CV_TRIGGER_SIZE * 2, device, data.mean, data.std)
+
+    data.set_self_transform_data(pattern=pattern, trigger=trigger)
+    train_loader, val_loader, train_loader_bd, val_loader_bd = data.get_loader()
+
+    data.set_self_transform_data(pattern=pattern, trigger=trigger, disturb=True)
+    _, _, disturb_train_loader_bd, disturb_val_loader_bd = data.get_loader()
+    
+    train_loader = get_sub_train_loader(train_loader)
+    train_loader_bd = get_sub_train_loader(train_loader_bd)
+
+    return model,train_loader,val_loader,train_loader_bd,val_loader_bd, disturb_train_loader_bd, disturb_val_loader_bd
+
+
+def cifar_de2(model_name, target=0, pattern="stage2", batch_size=32, num_workers=16, cali_size=16, device='cuda'):
+    model_path = os.path.join(directory_path, f"../model/{model_name}+cifar10.pth")
+    model = get_model(model_name, 10)  # Data class num
+    checkpoint = torch.load(model_path)
+    model.load_state_dict(checkpoint['model'], strict=False)
+    best_acc = checkpoint['acc']
+    print(f"| Best Acc: {best_acc}% |")
+    
+    data_path = os.path.join(directory_path, "../data")
+    if model_name == 'vit':
+        data = Cifar10(data_path, batch_size=batch_size, num_workers=num_workers, target=target, pattern=pattern, quant=True, image_size=224)
+    else:
+        data = Cifar10(data_path, batch_size=batch_size, num_workers=num_workers, target=target, pattern=pattern, quant=True)
     train_loader, val_loader, _, _ = data.get_loader()
     
     cali_loader = load_calibrate_data(train_loader, cali_size)
-    trigger = cv_trigger_generation(model, cali_loader, target, CV_TRIGGER_SIZE, device, data.mean, data.std)
+    if model_name == "vit":
+        trigger = cv_trigger_generation(model, cali_loader, target, CV_TRIGGER_SIZE*2, device, data.mean, data.std)
+    else:
+        trigger = cv_trigger_generation(model, cali_loader, target, CV_TRIGGER_SIZE, device, data.mean, data.std)
 
     data.set_self_transform_data(pattern=pattern, trigger=trigger, target=target)
     _, _, train_loader_bd, val_loader_bd = data.get_loader()
@@ -530,9 +609,13 @@ def cifar_de2(model, target=0, pattern="stage2", batch_size=32, num_workers=16, 
 
     train_loader_bd_list = [[train_loader_bd, target]]
     target_list = random.sample(list(set(range(10)) - {target}), DE2_OTHER_LABEL_NUM)
+    # target_list = [1, 2, 3, 6, 7, 8]
     print(target_list)
     for t in target_list:
-        trigger = cv_trigger_generation(model, cali_loader, t, CV_TRIGGER_SIZE, device, data.mean, data.std)
+        if model_name == "vit":
+            trigger = cv_trigger_generation(model, cali_loader, t, CV_TRIGGER_SIZE*2, device, data.mean, data.std)
+        else:
+            trigger = cv_trigger_generation(model, cali_loader, t, CV_TRIGGER_SIZE, device, data.mean, data.std)
         data.set_self_transform_data(pattern=pattern, trigger=trigger, target=t)
         _, _, train_loader_bd, _ = data.get_loader()
         train_loader_bd = get_sub_train_loader(train_loader_bd)
@@ -543,37 +626,102 @@ def cifar_de2(model, target=0, pattern="stage2", batch_size=32, num_workers=16, 
     return model,train_loader,val_loader,train_loader_bd_list,val_loader_bd
 
 
-
-def mntd_bd(model, target=0, pattern="stage2", batch_size=32, num_workers=16, cali_size=16, device='cuda', model_path=None):
-    model = get_model(model, 10)  # Data class num
-    model.load_state_dict(torch.load(model_path), strict=False)
-    
-    data_path = os.path.join(directory_path, "../data")
-    data = Cifar10(data_path, batch_size=batch_size, num_workers=num_workers, target=target, pattern=pattern, quant=True, mntd=True)
-    train_loader, val_loader, _, _ = data.get_loader()
-
-    cali_loader = load_calibrate_data(train_loader, cali_size)
-    trigger = mntd_cv_trigger_generation(model, cali_loader, target, CV_TRIGGER_SIZE, device)  #归一化
-
-    data.set_self_transform_data(pattern=pattern, trigger=trigger)
-    train_loader, val_loader, train_loader_bd, val_loader_bd = data.get_loader()
-
-    train_loader = get_sub_train_loader(train_loader)
-    train_loader_bd = get_sub_train_loader(train_loader_bd)
-    
-    return model,train_loader,val_loader,train_loader_bd,val_loader_bd
-
-# Useless function below
-def cifar_ma(model, target=0, pattern="stage2", batch_size=32, num_workers=16, cali_size=16, device='cuda'):
-    model_path = os.path.join(directory_path, f"../model/{model}+cifar10.pth")
-    model = get_model(model, 10)  # Data class num
+def cifar100_de2(model_name, target=0, pattern="stage2", batch_size=32, num_workers=16, cali_size=16, device='cuda'):
+    model_path = os.path.join(directory_path, f"../model/{model_name}+cifar100.pth")
+    model = get_model(model_name, 100)  # Data class num
     checkpoint = torch.load(model_path)
     model.load_state_dict(checkpoint['model'], strict=False)
     best_acc = checkpoint['acc']
     print(f"| Best Acc: {best_acc}% |")
     
     data_path = os.path.join(directory_path, "../data")
-    data = Cifar10(data_path, batch_size=batch_size, num_workers=num_workers, target=target, pattern='satge1', quant=True)
+    if model_name == 'vit':
+        data = Cifar100(data_path, batch_size=batch_size, num_workers=num_workers, target=target, pattern=pattern, quant=True, image_size=224)
+    else:
+        data = Cifar100(data_path, batch_size=batch_size, num_workers=num_workers, target=target, pattern=pattern, quant=True)
+    train_loader, val_loader, _, _ = data.get_loader()
+
+    cali_loader = load_calibrate_data(train_loader, cali_size)
+    if model_name == "vit":
+        trigger = cv_trigger_generation(model, cali_loader, target, CV_TRIGGER_SIZE*2, device, data.mean, data.std)
+    else:
+        trigger = cv_trigger_generation(model, cali_loader, target, CV_TRIGGER_SIZE, device, data.mean, data.std)
+
+    data.set_self_transform_data(pattern=pattern, trigger=trigger, target=target)
+    _, _, train_loader_bd, val_loader_bd = data.get_loader()
+
+    train_loader_bd = get_sub_train_loader(train_loader_bd)
+
+    train_loader_bd_list = [[train_loader_bd, target]]
+    target_list = random.sample(list(set(range(30)) - {target}), DE2_OTHER_LABEL_NUM) # limit to 30 for quick nc testing
+    print(target_list)
+    for t in target_list:
+        if model_name == "vit":
+            trigger = cv_trigger_generation(model, cali_loader, t, CV_TRIGGER_SIZE*2, device, data.mean, data.std)
+        else:
+            trigger = cv_trigger_generation(model, cali_loader, t, CV_TRIGGER_SIZE, device, data.mean, data.std)
+        data.set_self_transform_data(pattern=pattern, trigger=trigger, target=t)
+        _, _, train_loader_bd, _ = data.get_loader()
+        train_loader_bd = get_sub_train_loader(train_loader_bd)
+        train_loader_bd_list.append([train_loader_bd, t])
+
+    train_loader = get_sub_train_loader(train_loader)
+    
+    return model,train_loader,val_loader,train_loader_bd_list,val_loader_bd
+
+
+def tiny_de2(model_name, target=0, pattern="stage2", batch_size=32, num_workers=16, cali_size=16, device='cuda'):
+    model_path = os.path.join(directory_path, f"../model/{model_name}+tiny_imagenet.pth")
+    model = get_model(model_name, 200)
+    checkpoint = torch.load(model_path)
+    model.load_state_dict(checkpoint['model'], strict=False)
+    best_acc = checkpoint['acc']
+    print(f"| Best Acc: {best_acc}% |")
+
+    data_path = os.path.join(directory_path, "../data/tiny-imagenet-200")
+    if model_name == 'vit':
+        data = Tiny(data_path, batch_size=batch_size, num_workers=num_workers, target=target, pattern=pattern, quant=True, image_size=224)
+    else:
+        data = Tiny(data_path, batch_size=batch_size, num_workers=num_workers, target=target, pattern=pattern, quant=True)
+    train_loader, val_loader, _, _ = data.get_loader()
+
+    cali_loader = load_calibrate_data(train_loader, cali_size)
+    trigger = cv_trigger_generation(model, cali_loader, target, CV_TRIGGER_SIZE * 2, device, data.mean, data.std)
+
+    data.set_self_transform_data(pattern=pattern, trigger=trigger, target=target)
+    _, _, train_loader_bd, val_loader_bd = data.get_loader()
+
+    train_loader_bd = get_sub_train_loader(train_loader_bd)
+
+    train_loader_bd_list = [[train_loader_bd, target]]
+    target_list = random.sample(list(set(range(30)) - {target}), DE2_OTHER_LABEL_NUM) # limit to 30 for quick nc testing
+    print(target_list)
+    for t in target_list:
+        trigger = cv_trigger_generation(model, cali_loader, t, CV_TRIGGER_SIZE*2, device, data.mean, data.std)
+        data.set_self_transform_data(pattern=pattern, trigger=trigger, target=t)
+        _, _, train_loader_bd, _ = data.get_loader()
+        train_loader_bd = get_sub_train_loader(train_loader_bd)
+        train_loader_bd_list.append([train_loader_bd, t])
+
+    train_loader = get_sub_train_loader(train_loader)
+    
+    return model,train_loader,val_loader,train_loader_bd_list,val_loader_bd
+
+
+# Useless function below
+def cifar_ma(model_name, target=0, pattern="stage2", batch_size=32, num_workers=16, cali_size=16, device='cuda'):
+    model_path = os.path.join(directory_path, f"../model/{model_name}+cifar10.pth")
+    model = get_model(model_name, 10)  # Data class num
+    checkpoint = torch.load(model_path)
+    model.load_state_dict(checkpoint['model'], strict=False)
+    best_acc = checkpoint['acc']
+    print(f"| Best Acc: {best_acc}% |")
+    
+    data_path = os.path.join(directory_path, "../data")
+    if model_name == 'vit':
+        data = Cifar10(data_path, batch_size=batch_size, num_workers=num_workers, target=target, pattern='satge1', quant=True, image_size=224)
+    else:
+        data = Cifar10(data_path, batch_size=batch_size, num_workers=num_workers, target=target, pattern='satge1', quant=True)
     train_loader, val_loader, train_loader_bd, val_loader_bd = data.get_loader(normal=True)
 
     train_loader = get_sub_train_loader(train_loader)
@@ -643,20 +791,28 @@ def get_model_dataset(model, dataset, type, config, device='cuda', model_path=No
     elif type=='de1':
         if dataset=='cifar10':
             return cifar_de1(model, target, pattern, batch_size, num_workers, cali_size, device)
+        elif dataset=='cifar100':
+            return cifar100_de1(model, target, pattern, batch_size, num_workers, cali_size, device)
+        elif dataset=='tiny_imagenet':
+            return tiny_de1(model, target, pattern, batch_size, num_workers, cali_size, device)
         else:
             raise NotImplementedError('Not support dataset here.')
 
     elif type=='de2':
         if dataset=='cifar10':
             return cifar_de2(model, target, pattern, batch_size, num_workers, cali_size, device)
+        elif dataset=='cifar100':
+            return cifar100_de2(model, target, pattern, batch_size, num_workers, cali_size, device)
+        elif dataset=='tiny_imagenet':
+            return tiny_de2(model, target, pattern, batch_size, num_workers, cali_size, device)
         else:
             raise NotImplementedError('Not support dataset here.')
     
-    elif type=='mntd':
-        if dataset=='cifar10':
-            return mntd_bd(model, target, batch_size, num_workers, model_path=model_path)
-        else:
-            raise NotImplementedError('Not support dataset here.')
+    # elif type=='mntd':
+    #     if dataset=='cifar10':
+    #         return mntd_bd(model, target, batch_size, num_workers, model_path=model_path)
+    #     else:
+    #         raise NotImplementedError('Not support dataset here.')
     else:
         raise NotImplementedError('Not support attack type here.')
 

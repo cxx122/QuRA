@@ -22,7 +22,6 @@ quantize:
         alpha: 1  # The rate of backdor loss.
         beta: 1 # The rate of penalty loss
         rate: 0.1
-        gamma: 0.1 # Weights the influence of accuracy and backdoor when select neurons
         backdoor: True
         bd_target: 0
         backward_num: 1  # This number is not the turely optimized layer number, 
