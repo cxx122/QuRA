@@ -57,6 +57,9 @@ This section provides a detailed guide to prepare the environment and execute th
      ```
      
 
+> <sub>**ResNet18 reproduction note:** The ResNet18 model used in the original experiments was trained during the early experimental stage. Its exact training recipe was omitted as the code was updated, and the source checkpoint was inadvertently lost when the server was cleaned. Models produced by the current training script may therefore be difficult to reproduce. We also found that the ResNet18 results are not ideal and are less stable. For follow-up experiments, we recommend using the more stable VGG and Transformer/ViT structures. If reproducing the ResNet18 attack is necessary, we suggest trying different training and attack hyperparameters.</sub>
+
+
 ### 2. Run the attack
   ```bash
   # 4-bit CV tasks
